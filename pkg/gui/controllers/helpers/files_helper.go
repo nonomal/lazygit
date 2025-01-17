@@ -1,62 +1,91 @@
 package helpers
 
 import (
-	"github.com/jesseduffield/lazygit/pkg/commands"
-	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
-	"github.com/jesseduffield/lazygit/pkg/gui/types"
+	"path/filepath"
+
+	"github.com/samber/lo"
 )
 
 type IFilesHelper interface {
-	EditFile(filename string) error
+	EditFiles(filenames []string) error
 	EditFileAtLine(filename string, lineNumber int) error
 	OpenFile(filename string) error
-	OpenFileAtLine(filename string, lineNumber int) error
 }
 
 type FilesHelper struct {
-	c   *types.HelperCommon
-	git *commands.GitCommand
-	os  *oscommands.OSCommand
+	c *HelperCommon
 }
 
-func NewFilesHelper(
-	c *types.HelperCommon,
-	git *commands.GitCommand,
-	os *oscommands.OSCommand,
-) *FilesHelper {
+func NewFilesHelper(c *HelperCommon) *FilesHelper {
 	return &FilesHelper{
-		c:   c,
-		git: git,
-		os:  os,
+		c: c,
 	}
 }
 
 var _ IFilesHelper = &FilesHelper{}
 
-func (self *FilesHelper) EditFile(filename string) error {
-	return self.EditFileAtLine(filename, 1)
+func (self *FilesHelper) EditFiles(filenames []string) error {
+	absPaths := lo.Map(filenames, func(filename string, _ int) string {
+		absPath, err := filepath.Abs(filename)
+		if err != nil {
+			return filename
+		}
+		return absPath
+	})
+	cmdStr, suspend := self.c.Git().File.GetEditCmdStr(absPaths)
+	return self.callEditor(cmdStr, suspend)
 }
 
 func (self *FilesHelper) EditFileAtLine(filename string, lineNumber int) error {
-	cmdStr, err := self.git.File.GetEditCmdStr(filename, lineNumber)
+	absPath, err := filepath.Abs(filename)
 	if err != nil {
-		return self.c.Error(err)
+		return err
+	}
+	cmdStr, suspend := self.c.Git().File.GetEditAtLineCmdStr(absPath, lineNumber)
+	return self.callEditor(cmdStr, suspend)
+}
+
+func (self *FilesHelper) EditFileAtLineAndWait(filename string, lineNumber int) error {
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		return err
+	}
+	cmdStr := self.c.Git().File.GetEditAtLineAndWaitCmdStr(absPath, lineNumber)
+
+	// Always suspend, regardless of the value of the suspend config,
+	// since we want to prevent interacting with the UI until the editor
+	// returns, even if the editor doesn't use the terminal
+	return self.callEditor(cmdStr, true)
+}
+
+func (self *FilesHelper) OpenDirInEditor(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	cmdStr, suspend := self.c.Git().File.GetOpenDirInEditorCmdStr(absPath)
+
+	return self.callEditor(cmdStr, suspend)
+}
+
+func (self *FilesHelper) callEditor(cmdStr string, suspend bool) error {
+	if suspend {
+		return self.c.RunSubprocessAndRefresh(
+			self.c.OS().Cmd.NewShell(cmdStr),
+		)
 	}
 
-	self.c.LogAction(self.c.Tr.Actions.EditFile)
-	return self.c.RunSubprocessAndRefresh(
-		self.os.Cmd.NewShell(cmdStr),
-	)
+	return self.c.OS().Cmd.NewShell(cmdStr).Run()
 }
 
 func (self *FilesHelper) OpenFile(filename string) error {
-	return self.OpenFileAtLine(filename, 1)
-}
-
-func (self *FilesHelper) OpenFileAtLine(filename string, lineNumber int) error {
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		return err
+	}
 	self.c.LogAction(self.c.Tr.Actions.OpenFile)
-	if err := self.os.OpenFileAtLine(filename, lineNumber); err != nil {
-		return self.c.Error(err)
+	if err := self.c.OS().OpenFile(absPath); err != nil {
+		return err
 	}
 	return nil
 }

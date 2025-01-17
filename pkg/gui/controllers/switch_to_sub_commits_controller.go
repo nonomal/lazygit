@@ -1,45 +1,53 @@
 package controllers
 
 import (
-	"github.com/jesseduffield/lazygit/pkg/commands/loaders"
-	"github.com/jesseduffield/lazygit/pkg/commands/models"
+	"github.com/jesseduffield/lazygit/pkg/gui/controllers/helpers"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
 )
 
 var _ types.IController = &SwitchToSubCommitsController{}
 
 type CanSwitchToSubCommits interface {
-	types.Context
+	types.IListContext
 	GetSelectedRef() types.Ref
+	ShowBranchHeadsInSubCommits() bool
 }
 
+// Not using our ListControllerTrait because our 'selected' item is not a list item
+// but an attribute on it i.e. the ref of an item.
 type SwitchToSubCommitsController struct {
 	baseController
-	*controllerCommon
+	*ListControllerTrait[types.Ref]
+	c       *ControllerCommon
 	context CanSwitchToSubCommits
-
-	setSubCommits func([]*models.Commit)
 }
 
 func NewSwitchToSubCommitsController(
-	controllerCommon *controllerCommon,
-	setSubCommits func([]*models.Commit),
+	c *ControllerCommon,
 	context CanSwitchToSubCommits,
 ) *SwitchToSubCommitsController {
 	return &SwitchToSubCommitsController{
-		baseController:   baseController{},
-		controllerCommon: controllerCommon,
-		context:          context,
-		setSubCommits:    setSubCommits,
+		baseController: baseController{},
+		ListControllerTrait: NewListControllerTrait[types.Ref](
+			c,
+			context,
+			context.GetSelectedRef,
+			func() ([]types.Ref, int, int) {
+				panic("Not implemented")
+			},
+		),
+		c:       c,
+		context: context,
 	}
 }
 
 func (self *SwitchToSubCommitsController) GetKeybindings(opts types.KeybindingsOpts) []*types.Binding {
 	bindings := []*types.Binding{
 		{
-			Handler:     self.viewCommits,
-			Key:         opts.GetKey(opts.Config.Universal.GoInto),
-			Description: self.c.Tr.LcViewCommits,
+			Handler:           self.viewCommits,
+			GetDisabledReason: self.require(self.singleItemSelected()),
+			Key:               opts.GetKey(opts.Config.Universal.GoInto),
+			Description:       self.c.Tr.ViewCommits,
 		},
 	}
 
@@ -56,35 +64,10 @@ func (self *SwitchToSubCommitsController) viewCommits() error {
 		return nil
 	}
 
-	// need to populate my sub commits
-	commits, err := self.git.Loaders.Commits.GetCommits(
-		loaders.GetCommitsOptions{
-			Limit:                true,
-			FilterPath:           self.modes.Filtering.GetPath(),
-			IncludeRebaseCommits: false,
-			RefName:              ref.FullRefName(),
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	self.setSubCommits(commits)
-
-	self.contexts.SubCommits.SetSelectedLineIdx(0)
-	self.contexts.SubCommits.SetParentContext(self.context)
-	self.contexts.SubCommits.SetWindowName(self.context.GetWindowName())
-	self.contexts.SubCommits.SetTitleRef(ref.Description())
-	self.contexts.SubCommits.SetRefName(ref.RefName())
-
-	err = self.c.PostRefreshUpdate(self.contexts.SubCommits)
-	if err != nil {
-		return err
-	}
-
-	return self.c.PushContext(self.contexts.SubCommits)
-}
-
-func (self *SwitchToSubCommitsController) Context() types.Context {
-	return self.context
+	return self.c.Helpers().SubCommits.ViewSubCommits(helpers.ViewSubCommitsOpts{
+		Ref:             ref,
+		TitleRef:        ref.RefName(),
+		Context:         self.context,
+		ShowBranchHeads: self.context.ShowBranchHeadsInSubCommits(),
+	})
 }

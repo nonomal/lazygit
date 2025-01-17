@@ -27,6 +27,7 @@ func TestGetBindingSections(t *testing.T) {
 				{
 					ViewName:    "files",
 					Description: "stage file",
+					Key:         'a',
 				},
 			},
 			expected: []*bindingSection{
@@ -36,6 +37,7 @@ func TestGetBindingSections(t *testing.T) {
 						{
 							ViewName:    "files",
 							Description: "stage file",
+							Key:         'a',
 						},
 					},
 				},
@@ -47,15 +49,17 @@ func TestGetBindingSections(t *testing.T) {
 				{
 					ViewName:    "",
 					Description: "quit",
+					Key:         'a',
 				},
 			},
 			expected: []*bindingSection{
 				{
-					title: "Global Keybindings",
+					title: "Global keybindings",
 					bindings: []*types.Binding{
 						{
 							ViewName:    "",
 							Description: "quit",
+							Key:         'a',
 						},
 					},
 				},
@@ -67,14 +71,17 @@ func TestGetBindingSections(t *testing.T) {
 				{
 					ViewName:    "files",
 					Description: "stage file",
+					Key:         'a',
 				},
 				{
 					ViewName:    "files",
 					Description: "unstage file",
+					Key:         'a',
 				},
 				{
 					ViewName:    "submodules",
 					Description: "drop submodule",
+					Key:         'a',
 				},
 			},
 			expected: []*bindingSection{
@@ -84,10 +91,12 @@ func TestGetBindingSections(t *testing.T) {
 						{
 							ViewName:    "files",
 							Description: "stage file",
+							Key:         'a',
 						},
 						{
 							ViewName:    "files",
 							Description: "unstage file",
+							Key:         'a',
 						},
 					},
 				},
@@ -97,6 +106,7 @@ func TestGetBindingSections(t *testing.T) {
 						{
 							ViewName:    "submodules",
 							Description: "drop submodule",
+							Key:         'a',
 						},
 					},
 				},
@@ -108,28 +118,33 @@ func TestGetBindingSections(t *testing.T) {
 				{
 					ViewName:    "files",
 					Description: "stage file",
+					Key:         'a',
 				},
 				{
 					ViewName:    "files",
 					Description: "unstage file",
+					Key:         'a',
 				},
 				{
 					ViewName:    "files",
 					Description: "scroll",
+					Key:         'a',
 					Tag:         "navigation",
 				},
 				{
 					ViewName:    "commits",
 					Description: "revert commit",
+					Key:         'a',
 				},
 			},
 			expected: []*bindingSection{
 				{
-					title: "List Panel Navigation",
+					title: "List panel navigation",
 					bindings: []*types.Binding{
 						{
 							ViewName:    "files",
 							Description: "scroll",
+							Key:         'a',
 							Tag:         "navigation",
 						},
 					},
@@ -140,6 +155,7 @@ func TestGetBindingSections(t *testing.T) {
 						{
 							ViewName:    "commits",
 							Description: "revert commit",
+							Key:         'a',
 						},
 					},
 				},
@@ -149,10 +165,12 @@ func TestGetBindingSections(t *testing.T) {
 						{
 							ViewName:    "files",
 							Description: "stage file",
+							Key:         'a',
 						},
 						{
 							ViewName:    "files",
 							Description: "unstage file",
+							Key:         'a',
 						},
 					},
 				},
@@ -164,43 +182,51 @@ func TestGetBindingSections(t *testing.T) {
 				{
 					ViewName:    "files",
 					Description: "stage file",
+					Key:         'a',
 				},
 				{
 					ViewName:    "files",
 					Description: "unstage file",
+					Key:         'a',
 				},
 				{
 					ViewName:    "files",
 					Description: "scroll",
+					Key:         'a',
 					Tag:         "navigation",
 				},
 				{
 					ViewName:    "commits",
 					Description: "revert commit",
+					Key:         'a',
 				},
 				{
 					ViewName:    "commits",
 					Description: "scroll",
+					Key:         'a',
 					Tag:         "navigation",
 				},
 				{
 					ViewName:    "commits",
 					Description: "page up",
+					Key:         'a',
 					Tag:         "navigation",
 				},
 			},
 			expected: []*bindingSection{
 				{
-					title: "List Panel Navigation",
+					title: "List panel navigation",
 					bindings: []*types.Binding{
 						{
 							ViewName:    "files",
 							Description: "scroll",
+							Key:         'a',
 							Tag:         "navigation",
 						},
 						{
 							ViewName:    "commits",
 							Description: "page up",
+							Key:         'a',
 							Tag:         "navigation",
 						},
 					},
@@ -211,6 +237,7 @@ func TestGetBindingSections(t *testing.T) {
 						{
 							ViewName:    "commits",
 							Description: "revert commit",
+							Key:         'a',
 						},
 					},
 				},
@@ -220,10 +247,12 @@ func TestGetBindingSections(t *testing.T) {
 						{
 							ViewName:    "files",
 							Description: "stage file",
+							Key:         'a',
 						},
 						{
 							ViewName:    "files",
 							Description: "unstage file",
+							Key:         'a',
 						},
 					},
 				},
@@ -233,7 +262,7 @@ func TestGetBindingSections(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.testName, func(t *testing.T) {
-			actual := getBindingSections(test.bindings, &tr)
+			actual := getBindingSections(test.bindings, tr)
 			assert.EqualValues(t, test.expected, actual)
 		})
 	}

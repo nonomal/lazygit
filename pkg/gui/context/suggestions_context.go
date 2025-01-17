@@ -1,57 +1,91 @@
 package context
 
 import (
-	"github.com/jesseduffield/gocui"
+	"github.com/jesseduffield/lazygit/pkg/gui/presentation"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
+	"github.com/jesseduffield/lazygit/pkg/tasks"
 )
 
 type SuggestionsContext struct {
-	*BasicViewModel[*types.Suggestion]
+	*ListViewModel[*types.Suggestion]
 	*ListContextTrait
+
+	State *SuggestionsContextState
+}
+
+type SuggestionsContextState struct {
+	Suggestions        []*types.Suggestion
+	OnConfirm          func() error
+	OnClose            func() error
+	OnDeleteSuggestion func() error
+	AsyncHandler       *tasks.AsyncHandler
+
+	AllowEditSuggestion bool
+
+	// FindSuggestions will take a string that the user has typed into a prompt
+	// and return a slice of suggestions which match that string.
+	FindSuggestions func(string) []*types.Suggestion
 }
 
 var _ types.IListContext = (*SuggestionsContext)(nil)
 
 func NewSuggestionsContext(
-	getModel func() []*types.Suggestion,
-	view *gocui.View,
-	getDisplayStrings func(startIdx int, length int) [][]string,
-
-	onFocus func(types.OnFocusOpts) error,
-	onRenderToMain func() error,
-	onFocusLost func(opts types.OnFocusLostOpts) error,
-
-	c *types.HelperCommon,
+	c *ContextCommon,
 ) *SuggestionsContext {
-	viewModel := NewBasicViewModel(getModel)
+	state := &SuggestionsContextState{
+		AsyncHandler: tasks.NewAsyncHandler(c.OnWorker),
+	}
+	getModel := func() []*types.Suggestion {
+		return state.Suggestions
+	}
+
+	getDisplayStrings := func(_ int, _ int) [][]string {
+		return presentation.GetSuggestionListDisplayStrings(state.Suggestions)
+	}
+
+	viewModel := NewListViewModel(getModel)
 
 	return &SuggestionsContext{
-		BasicViewModel: viewModel,
+		State:         state,
+		ListViewModel: viewModel,
 		ListContextTrait: &ListContextTrait{
 			Context: NewSimpleContext(NewBaseContext(NewBaseContextOpts{
-				View:                  view,
+				View:                  c.Views().Suggestions,
 				WindowName:            "suggestions",
 				Key:                   SUGGESTIONS_CONTEXT_KEY,
 				Kind:                  types.PERSISTENT_POPUP,
 				Focusable:             true,
 				HasUncontrolledBounds: true,
-			}), ContextCallbackOpts{
-				OnFocus:        onFocus,
-				OnFocusLost:    onFocusLost,
-				OnRenderToMain: onRenderToMain,
-			}),
-			list:              viewModel,
-			getDisplayStrings: getDisplayStrings,
-			c:                 c,
+			})),
+			ListRenderer: ListRenderer{
+				list:              viewModel,
+				getDisplayStrings: getDisplayStrings,
+			},
+			c: c,
 		},
 	}
 }
 
-func (self *SuggestionsContext) GetSelectedItemId() string {
-	item := self.GetSelected()
-	if item == nil {
-		return ""
-	}
+func (self *SuggestionsContext) SetSuggestions(suggestions []*types.Suggestion) {
+	self.State.Suggestions = suggestions
+	self.SetSelection(0)
+	self.c.ResetViewOrigin(self.GetView())
+	self.HandleRender()
+}
 
-	return item.Value
+func (self *SuggestionsContext) RefreshSuggestions() {
+	self.State.AsyncHandler.Do(func() func() {
+		findSuggestionsFn := self.State.FindSuggestions
+		if findSuggestionsFn != nil {
+			suggestions := findSuggestionsFn(self.c.GetPromptInput())
+			return func() { self.SetSuggestions(suggestions) }
+		} else {
+			return func() {}
+		}
+	})
+}
+
+// There is currently no need to use range-select in the suggestions view so we're disabling it.
+func (self *SuggestionsContext) RangeSelectEnabled() bool {
+	return false
 }

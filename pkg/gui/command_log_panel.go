@@ -30,6 +30,7 @@ func (gui *Gui) LogAction(action string) {
 
 	gui.Views.Extras.Autoscroll = true
 
+	gui.GuiLog = append(gui.GuiLog, action)
 	fmt.Fprint(gui.Views.Extras, "\n"+style.FgYellow.Sprint(action))
 }
 
@@ -46,7 +47,7 @@ func (gui *Gui) LogCommand(cmdStr string, commandLine bool) {
 		// we style it differently to communicate that
 		textStyle = style.FgMagenta
 	}
-	gui.CmdLog = append(gui.CmdLog, cmdStr)
+	gui.GuiLog = append(gui.GuiLog, cmdStr)
 	indentedCmdStr := "  " + strings.Replace(cmdStr, "\n", "\n  ", -1)
 	fmt.Fprint(gui.Views.Extras, "\n"+textStyle.Sprint(indentedCmdStr))
 }
@@ -54,11 +55,11 @@ func (gui *Gui) LogCommand(cmdStr string, commandLine bool) {
 func (gui *Gui) printCommandLogHeader() {
 	introStr := fmt.Sprintf(
 		gui.c.Tr.CommandLogHeader,
-		keybindings.Label(gui.c.UserConfig.Keybinding.Universal.ExtrasMenu),
+		keybindings.Label(gui.c.UserConfig().Keybinding.Universal.ExtrasMenu),
 	)
 	fmt.Fprintln(gui.Views.Extras, style.FgCyan.Sprint(introStr))
 
-	if gui.c.UserConfig.Gui.ShowRandomTip {
+	if gui.c.UserConfig().Gui.ShowRandomTip {
 		fmt.Fprintf(
 			gui.Views.Extras,
 			"%s: %s",
@@ -69,7 +70,7 @@ func (gui *Gui) printCommandLogHeader() {
 }
 
 func (gui *Gui) getRandomTip() string {
-	config := gui.c.UserConfig.Keybinding
+	config := gui.c.UserConfig().Keybinding
 
 	formattedKey := func(key string) string {
 		return keybindings.Label(key)
@@ -79,7 +80,7 @@ func (gui *Gui) getRandomTip() string {
 		// keybindings and lazygit-specific advice
 		fmt.Sprintf(
 			"To force push, press '%s' and then if the push is rejected you will be asked if you want to force push",
-			formattedKey(config.Universal.PushFiles),
+			formattedKey(config.Universal.Push),
 		),
 		fmt.Sprintf(
 			"To filter commits by path, press '%s'",
@@ -103,7 +104,7 @@ func (gui *Gui) getRandomTip() string {
 		),
 		fmt.Sprintf(
 			"to hard reset onto your current upstream branch, press '%s' in the files panel",
-			formattedKey(config.Files.ViewResetOptions),
+			formattedKey(config.Commits.ViewResetOptions),
 		),
 		fmt.Sprintf(
 			"To push a tag, navigate to the tag in the tags tab and press '%s'",
@@ -133,10 +134,6 @@ func (gui *Gui) getRandomTip() string {
 		fmt.Sprintf(
 			"To escape a mode, for example cherry-picking, patch-building, diffing, or filtering mode, you can just spam the '%s' button. Unless of course you have `quitOnTopLevelReturn` enabled in your config",
 			formattedKey(config.Universal.Return),
-		),
-		fmt.Sprintf(
-			"To search for a string in your panel, press '%s'",
-			formattedKey(config.Universal.StartSearch),
 		),
 		fmt.Sprintf(
 			"You can page through the items of a panel using '%s' and '%s'",
@@ -191,7 +188,7 @@ func (gui *Gui) getRandomTip() string {
 		),
 	}
 
-	rand.Seed(time.Now().UnixNano())
-	randomIndex := rand.Intn(len(tips))
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+	randomIndex := rnd.Intn(len(tips))
 	return tips[randomIndex]
 }

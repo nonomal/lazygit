@@ -16,24 +16,38 @@ type BaseContext struct {
 	keybindingsFns      []types.KeybindingsFn
 	mouseKeybindingsFns []types.MouseKeybindingsFn
 	onClickFn           func() error
+	onRenderToMainFn    func()
+	onFocusFn           onFocusFn
+	onFocusLostFn       onFocusLostFn
 
-	focusable           bool
-	transient           bool
-	hasControlledBounds bool
+	focusable                   bool
+	transient                   bool
+	hasControlledBounds         bool
+	needsRerenderOnWidthChange  types.NeedsRerenderOnWidthChangeLevel
+	needsRerenderOnHeightChange bool
+	highlightOnFocus            bool
 
 	*ParentContextMgr
 }
 
+type (
+	onFocusFn     = func(types.OnFocusOpts)
+	onFocusLostFn = func(types.OnFocusLostOpts)
+)
+
 var _ types.IBaseContext = &BaseContext{}
 
 type NewBaseContextOpts struct {
-	Kind                  types.ContextKind
-	Key                   types.ContextKey
-	View                  *gocui.View
-	WindowName            string
-	Focusable             bool
-	Transient             bool
-	HasUncontrolledBounds bool // negating for the sake of making false the default
+	Kind                        types.ContextKind
+	Key                         types.ContextKey
+	View                        *gocui.View
+	WindowName                  string
+	Focusable                   bool
+	Transient                   bool
+	HasUncontrolledBounds       bool // negating for the sake of making false the default
+	HighlightOnFocus            bool
+	NeedsRerenderOnWidthChange  types.NeedsRerenderOnWidthChangeLevel
+	NeedsRerenderOnHeightChange bool
 
 	OnGetOptionsMap func() map[string]string
 }
@@ -44,16 +58,19 @@ func NewBaseContext(opts NewBaseContextOpts) *BaseContext {
 	hasControlledBounds := !opts.HasUncontrolledBounds
 
 	return &BaseContext{
-		kind:                opts.Kind,
-		key:                 opts.Key,
-		view:                opts.View,
-		windowName:          opts.WindowName,
-		onGetOptionsMap:     opts.OnGetOptionsMap,
-		focusable:           opts.Focusable,
-		transient:           opts.Transient,
-		hasControlledBounds: hasControlledBounds,
-		ParentContextMgr:    &ParentContextMgr{},
-		viewTrait:           viewTrait,
+		kind:                        opts.Kind,
+		key:                         opts.Key,
+		view:                        opts.View,
+		windowName:                  opts.WindowName,
+		onGetOptionsMap:             opts.OnGetOptionsMap,
+		focusable:                   opts.Focusable,
+		transient:                   opts.Transient,
+		hasControlledBounds:         hasControlledBounds,
+		highlightOnFocus:            opts.HighlightOnFocus,
+		needsRerenderOnWidthChange:  opts.NeedsRerenderOnWidthChange,
+		needsRerenderOnHeightChange: opts.NeedsRerenderOnHeightChange,
+		ParentContextMgr:            &ParentContextMgr{},
+		viewTrait:                   viewTrait,
 	}
 }
 
@@ -116,6 +133,11 @@ func (self *BaseContext) AddMouseKeybindingsFn(fn types.MouseKeybindingsFn) {
 	self.mouseKeybindingsFns = append(self.mouseKeybindingsFns, fn)
 }
 
+func (self *BaseContext) ClearAllBindingsFn() {
+	self.keybindingsFns = []types.KeybindingsFn{}
+	self.mouseKeybindingsFns = []types.MouseKeybindingsFn{}
+}
+
 func (self *BaseContext) AddOnClickFn(fn func() error) {
 	if fn != nil {
 		self.onClickFn = fn
@@ -124,6 +146,36 @@ func (self *BaseContext) AddOnClickFn(fn func() error) {
 
 func (self *BaseContext) GetOnClick() func() error {
 	return self.onClickFn
+}
+
+func (self *BaseContext) AddOnRenderToMainFn(fn func()) {
+	if fn != nil {
+		self.onRenderToMainFn = fn
+	}
+}
+
+func (self *BaseContext) GetOnRenderToMain() func() {
+	return self.onRenderToMainFn
+}
+
+func (self *BaseContext) AddOnFocusFn(fn onFocusFn) {
+	if fn != nil {
+		self.onFocusFn = fn
+	}
+}
+
+func (self *BaseContext) GetOnFocus() onFocusFn {
+	return self.onFocusFn
+}
+
+func (self *BaseContext) AddOnFocusLostFn(fn onFocusLostFn) {
+	if fn != nil {
+		self.onFocusLostFn = fn
+	}
+}
+
+func (self *BaseContext) GetOnFocusLost() onFocusLostFn {
+	return self.onFocusLostFn
 }
 
 func (self *BaseContext) GetMouseKeybindings(opts types.KeybindingsOpts) []*gocui.ViewMouseBinding {
@@ -149,6 +201,18 @@ func (self *BaseContext) HasControlledBounds() bool {
 	return self.hasControlledBounds
 }
 
+func (self *BaseContext) NeedsRerenderOnWidthChange() types.NeedsRerenderOnWidthChangeLevel {
+	return self.needsRerenderOnWidthChange
+}
+
+func (self *BaseContext) NeedsRerenderOnHeightChange() bool {
+	return self.needsRerenderOnHeightChange
+}
+
 func (self *BaseContext) Title() string {
 	return ""
+}
+
+func (self *BaseContext) TotalContentHeight() int {
+	return self.view.ViewLinesHeight()
 }

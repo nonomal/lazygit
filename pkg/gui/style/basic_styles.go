@@ -27,6 +27,7 @@ var (
 	BgBlue    = FromBasicBg(color.BgBlue)
 	BgMagenta = FromBasicBg(color.BgMagenta)
 	BgCyan    = FromBasicBg(color.BgCyan)
+	BgDefault = FromBasicBg(color.BgDefault)
 
 	// will not print any colour escape codes, including the reset escape code
 	Nothing = New()
@@ -38,7 +39,7 @@ var (
 		Foreground TextStyle
 		Background TextStyle
 	}{
-		"default": {FgWhite, BgBlack},
+		"default": {FgDefault, BgDefault},
 		"black":   {FgBlack, BgBlack},
 		"red":     {FgRed, BgRed},
 		"green":   {FgGreen, BgGreen},

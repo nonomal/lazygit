@@ -6,29 +6,13 @@ import (
 )
 
 type SimpleContext struct {
-	OnFocus     func(opts types.OnFocusOpts) error
-	OnFocusLost func(opts types.OnFocusLostOpts) error
-	OnRender    func() error
-	// this is for pushing some content to the main view
-	OnRenderToMain func() error
-
 	*BaseContext
+	handleRenderFunc func()
 }
 
-type ContextCallbackOpts struct {
-	OnFocus        func(opts types.OnFocusOpts) error
-	OnFocusLost    func(opts types.OnFocusLostOpts) error
-	OnRender       func() error
-	OnRenderToMain func() error
-}
-
-func NewSimpleContext(baseContext *BaseContext, opts ContextCallbackOpts) *SimpleContext {
+func NewSimpleContext(baseContext *BaseContext) *SimpleContext {
 	return &SimpleContext{
-		OnFocus:        opts.OnFocus,
-		OnFocusLost:    opts.OnFocusLost,
-		OnRender:       opts.OnRender,
-		OnRenderToMain: opts.OnRenderToMain,
-		BaseContext:    baseContext,
+		BaseContext: baseContext,
 	}
 }
 
@@ -45,44 +29,43 @@ func NewDisplayContext(key types.ContextKey, view *gocui.View, windowName string
 			Focusable:  false,
 			Transient:  false,
 		}),
-		ContextCallbackOpts{},
 	)
 }
 
-func (self *SimpleContext) HandleFocus(opts types.OnFocusOpts) error {
-	if self.OnFocus != nil {
-		if err := self.OnFocus(opts); err != nil {
-			return err
-		}
+func (self *SimpleContext) HandleFocus(opts types.OnFocusOpts) {
+	if self.highlightOnFocus {
+		self.GetViewTrait().SetHighlight(true)
 	}
 
-	if self.OnRenderToMain != nil {
-		if err := self.OnRenderToMain(); err != nil {
-			return err
-		}
+	if self.onFocusFn != nil {
+		self.onFocusFn(opts)
 	}
 
-	return nil
+	if self.onRenderToMainFn != nil {
+		self.onRenderToMainFn()
+	}
 }
 
-func (self *SimpleContext) HandleFocusLost(opts types.OnFocusLostOpts) error {
-	if self.OnFocusLost != nil {
-		return self.OnFocusLost(opts)
+func (self *SimpleContext) HandleFocusLost(opts types.OnFocusLostOpts) {
+	self.GetViewTrait().SetHighlight(false)
+	self.view.SetOriginX(0)
+	if self.onFocusLostFn != nil {
+		self.onFocusLostFn(opts)
 	}
-	return nil
 }
 
-func (self *SimpleContext) HandleRender() error {
-	if self.OnRender != nil {
-		return self.OnRender()
+func (self *SimpleContext) HandleRender() {
+	if self.handleRenderFunc != nil {
+		self.handleRenderFunc()
 	}
-	return nil
 }
 
-func (self *SimpleContext) HandleRenderToMain() error {
-	if self.OnRenderToMain != nil {
-		return self.OnRenderToMain()
-	}
+func (self *SimpleContext) SetHandleRenderFunc(f func()) {
+	self.handleRenderFunc = f
+}
 
-	return nil
+func (self *SimpleContext) HandleRenderToMain() {
+	if self.onRenderToMainFn != nil {
+		self.onRenderToMainFn()
+	}
 }

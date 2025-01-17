@@ -10,9 +10,9 @@ import (
 	"sync"
 
 	"github.com/go-errors/errors"
+	"github.com/samber/lo"
 
 	"github.com/atotto/clipboard"
-	"github.com/jesseduffield/generics/slices"
 	"github.com/jesseduffield/kill"
 	"github.com/jesseduffield/lazygit/pkg/common"
 	"github.com/jesseduffield/lazygit/pkg/config"
@@ -35,11 +35,14 @@ type OSCommand struct {
 
 // Platform stores the os state
 type Platform struct {
-	OS              string
-	Shell           string
-	ShellArg        string
-	OpenCommand     string
-	OpenLinkCommand string
+	OS                   string
+	Shell                string
+	InteractiveShell     string
+	ShellArg             string
+	InteractiveShellArg  string
+	InteractiveShellExit string
+	OpenCommand          string
+	OpenLinkCommand      string
 }
 
 // NewOSCommand os command runner
@@ -78,21 +81,30 @@ func FileType(path string) string {
 }
 
 func (c *OSCommand) OpenFile(filename string) error {
-	return c.OpenFileAtLine(filename, 1)
-}
-
-func (c *OSCommand) OpenFileAtLine(filename string, lineNumber int) error {
-	commandTemplate := c.UserConfig.OS.OpenCommand
+	commandTemplate := c.UserConfig().OS.Open
+	if commandTemplate == "" {
+		// Legacy support
+		commandTemplate = c.UserConfig().OS.OpenCommand
+	}
+	if commandTemplate == "" {
+		commandTemplate = config.GetPlatformDefaultConfig().Open
+	}
 	templateValues := map[string]string{
 		"filename": c.Quote(filename),
-		"line":     fmt.Sprintf("%d", lineNumber),
 	}
 	command := utils.ResolvePlaceholderString(commandTemplate, templateValues)
 	return c.Cmd.NewShell(command).Run()
 }
 
 func (c *OSCommand) OpenLink(link string) error {
-	commandTemplate := c.UserConfig.OS.OpenLinkCommand
+	commandTemplate := c.UserConfig().OS.OpenLink
+	if commandTemplate == "" {
+		// Legacy support
+		commandTemplate = c.UserConfig().OS.OpenLinkCommand
+	}
+	if commandTemplate == "" {
+		commandTemplate = config.GetPlatformDefaultConfig().OpenLink
+	}
 	templateValues := map[string]string{
 		"link": c.Quote(link),
 	}
@@ -108,7 +120,15 @@ func (c *OSCommand) Quote(message string) string {
 
 // AppendLineToFile adds a new line in file
 func (c *OSCommand) AppendLineToFile(filename, line string) error {
-	c.LogCommand(fmt.Sprintf("Appending '%s' to file '%s'", line, filename), false)
+	msg := utils.ResolvePlaceholderString(
+		c.Tr.Log.AppendingLineToFile,
+		map[string]string{
+			"line":     line,
+			"filename": filename,
+		},
+	)
+	c.LogCommand(msg, false)
+
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return utils.WrapError(err)
@@ -145,7 +165,13 @@ func (c *OSCommand) AppendLineToFile(filename, line string) error {
 
 // CreateFileWithContent creates a file with the given content
 func (c *OSCommand) CreateFileWithContent(path string, content string) error {
-	c.LogCommand(fmt.Sprintf("Creating file '%s'", path), false)
+	msg := utils.ResolvePlaceholderString(
+		c.Tr.Log.CreateFileWithContent,
+		map[string]string{
+			"path": path,
+		},
+	)
+	c.LogCommand(msg, false)
 	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
 		c.Log.Error(err)
 		return err
@@ -161,7 +187,13 @@ func (c *OSCommand) CreateFileWithContent(path string, content string) error {
 
 // Remove removes a file or directory at the specified path
 func (c *OSCommand) Remove(filename string) error {
-	c.LogCommand(fmt.Sprintf("Removing '%s'", filename), false)
+	msg := utils.ResolvePlaceholderString(
+		c.Tr.Log.Remove,
+		map[string]string{
+			"filename": filename,
+		},
+	)
+	c.LogCommand(msg, false)
 	err := os.RemoveAll(filename)
 	return utils.WrapError(err)
 }
@@ -178,12 +210,18 @@ func (c *OSCommand) FileExists(path string) (bool, error) {
 }
 
 // PipeCommands runs a heap of commands and pipes their inputs/outputs together like A | B | C
-func (c *OSCommand) PipeCommands(commandStrings ...string) error {
-	cmds := slices.Map(commandStrings, func(cmdString string) *exec.Cmd {
-		return c.Cmd.New(cmdString).GetCmd()
+func (c *OSCommand) PipeCommands(cmdObjs ...ICmdObj) error {
+	cmds := lo.Map(cmdObjs, func(cmdObj ICmdObj, _ int) *exec.Cmd {
+		return cmdObj.GetCmd()
 	})
 
-	logCmdStr := strings.Join(commandStrings, " | ")
+	logCmdStr := strings.Join(
+		lo.Map(cmdObjs, func(cmdObj ICmdObj, _ int) string {
+			return cmdObj.ToString()
+		}),
+		" | ",
+	)
+
 	c.LogCommand(logCmdStr, true)
 
 	for i := 0; i < len(cmds)-1; i++ {
@@ -204,14 +242,13 @@ func (c *OSCommand) PipeCommands(commandStrings ...string) error {
 	wg.Add(len(cmds))
 
 	for _, cmd := range cmds {
-		currentCmd := cmd
 		go utils.Safe(func() {
-			stderr, err := currentCmd.StderrPipe()
+			stderr, err := cmd.StderrPipe()
 			if err != nil {
 				c.Log.Error(err)
 			}
 
-			if err := currentCmd.Start(); err != nil {
+			if err := cmd.Start(); err != nil {
 				c.Log.Error(err)
 			}
 
@@ -221,7 +258,7 @@ func (c *OSCommand) PipeCommands(commandStrings ...string) error {
 				}
 			}
 
-			if err := currentCmd.Wait(); err != nil {
+			if err := cmd.Wait(); err != nil {
 				c.Log.Error(err)
 			}
 
@@ -250,12 +287,49 @@ func PrepareForChildren(cmd *exec.Cmd) {
 func (c *OSCommand) CopyToClipboard(str string) error {
 	escaped := strings.Replace(str, "\n", "\\n", -1)
 	truncated := utils.TruncateWithEllipsis(escaped, 40)
-	c.LogCommand(fmt.Sprintf("Copying '%s' to clipboard", truncated), false)
+
+	msg := utils.ResolvePlaceholderString(
+		c.Tr.Log.CopyToClipboard,
+		map[string]string{
+			"str": truncated,
+		},
+	)
+	c.LogCommand(msg, false)
+	if c.UserConfig().OS.CopyToClipboardCmd != "" {
+		cmdStr := utils.ResolvePlaceholderString(c.UserConfig().OS.CopyToClipboardCmd, map[string]string{
+			"text": c.Cmd.Quote(str),
+		})
+		return c.Cmd.NewShell(cmdStr).Run()
+	}
+
 	return clipboard.WriteAll(str)
 }
 
+func (c *OSCommand) PasteFromClipboard() (string, error) {
+	var s string
+	var err error
+	if c.UserConfig().OS.CopyToClipboardCmd != "" {
+		cmdStr := c.UserConfig().OS.ReadFromClipboardCmd
+		s, err = c.Cmd.NewShell(cmdStr).RunWithOutput()
+	} else {
+		s, err = clipboard.ReadAll()
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	return strings.ReplaceAll(s, "\r\n", "\n"), nil
+}
+
 func (c *OSCommand) RemoveFile(path string) error {
-	c.LogCommand(fmt.Sprintf("Deleting path '%s'", path), false)
+	msg := utils.ResolvePlaceholderString(
+		c.Tr.Log.RemoveFile,
+		map[string]string{
+			"path": path,
+		},
+	)
+	c.LogCommand(msg, false)
 
 	return c.removeFileFn(path)
 }

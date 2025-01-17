@@ -2,75 +2,64 @@ package components
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 
-	"github.com/jesseduffield/lazycore/pkg/utils"
+	lazycoreUtils "github.com/jesseduffield/lazycore/pkg/utils"
+	"github.com/jesseduffield/lazygit/pkg/commands/git_commands"
 	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
+	"github.com/jesseduffield/lazygit/pkg/utils"
+	"github.com/samber/lo"
 )
 
-// this is the integration runner for the new and improved integration interface
+type RunTestArgs struct {
+	Tests           []*IntegrationTest
+	Logf            func(format string, formatArgs ...interface{})
+	RunCmd          func(cmd *exec.Cmd) (int, error)
+	TestWrapper     func(test *IntegrationTest, f func() error)
+	Sandbox         bool
+	WaitForDebugger bool
+	RaceDetector    bool
+	CodeCoverageDir string
+	InputDelay      int
+	MaxAttempts     int
+}
 
-const (
-	TEST_NAME_ENV_VAR = "TEST_NAME"
-	SANDBOX_ENV_VAR   = "SANDBOX"
-)
-
-type Mode int
-
-const (
-	// Default: if a snapshot test fails, the we'll be asked whether we want to update it
-	ASK_TO_UPDATE_SNAPSHOT Mode = iota
-	// fails the test if the snapshots don't match
-	CHECK_SNAPSHOT
-	// runs the test and updates the snapshot
-	UPDATE_SNAPSHOT
-	// This just makes use of the setup step of the test to get you into
-	// a lazygit session. Then you'll be able to do whatever you want. Useful
-	// when you want to test certain things without needing to manually set
-	// up the situation yourself.
-	// fails the test if the snapshots don't match
-	SANDBOX
-)
-
-func RunTests(
-	tests []*IntegrationTest,
-	logf func(format string, formatArgs ...interface{}),
-	runCmd func(cmd *exec.Cmd) error,
-	testWrapper func(test *IntegrationTest, f func() error),
-	mode Mode,
-	keyPressDelay int,
-	maxAttempts int,
-) error {
-	projectRootDir := utils.GetLazyRootDirectory()
+// This function lets you run tests either from within `go test` or from a regular binary.
+// The reason for having two separate ways of testing is that `go test` isn't great at
+// showing what's actually happening during the test, but it's still good at running
+// tests in telling you about their results.
+func RunTests(args RunTestArgs) error {
+	projectRootDir := lazycoreUtils.GetLazyRootDirectory()
 	err := os.Chdir(projectRootDir)
 	if err != nil {
 		return err
 	}
 
-	testDir := filepath.Join(projectRootDir, "test", "integration_new")
-
-	if err := buildLazygit(); err != nil {
+	testDir := filepath.Join(projectRootDir, "test", "_results")
+	if err := buildLazygit(args); err != nil {
 		return err
 	}
 
-	for _, test := range tests {
-		test := test
+	gitVersion, err := getGitVersion()
+	if err != nil {
+		return err
+	}
 
-		testWrapper(test, func() error { //nolint: thelper
+	for _, test := range args.Tests {
+		args.TestWrapper(test, func() error { //nolint: thelper
 			paths := NewPaths(
 				filepath.Join(testDir, test.Name()),
 			)
 
-			for i := 0; i < maxAttempts; i++ {
-				err := runTest(test, paths, projectRootDir, logf, runCmd, mode, keyPressDelay)
+			for i := 0; i < args.MaxAttempts; i++ {
+				err := runTest(test, args, paths, projectRootDir, gitVersion)
 				if err != nil {
-					if i == maxAttempts-1 {
+					if i == args.MaxAttempts-1 {
 						return err
 					}
-					logf("retrying test %s", test.Name())
+					args.Logf("retrying test %s", test.Name())
 				} else {
 					break
 				}
@@ -85,103 +74,197 @@ func RunTests(
 
 func runTest(
 	test *IntegrationTest,
+	args RunTestArgs,
 	paths Paths,
 	projectRootDir string,
-	logf func(format string, formatArgs ...interface{}),
-	runCmd func(cmd *exec.Cmd) error,
-	mode Mode,
-	keyPressDelay int,
+	gitVersion *git_commands.GitVersion,
 ) error {
 	if test.Skip() {
-		logf("Skipping test %s", test.Name())
+		args.Logf("Skipping test %s", test.Name())
 		return nil
 	}
 
-	logf("path: %s", paths.Root())
-
-	if err := prepareTestDir(test, paths); err != nil {
-		return err
+	if !test.ShouldRunForGitVersion(gitVersion) {
+		args.Logf("Skipping test %s for git version %d.%d.%d", test.Name(), gitVersion.Major, gitVersion.Minor, gitVersion.Patch)
+		return nil
 	}
 
-	cmd, err := getLazygitCommand(test, paths, projectRootDir, mode, keyPressDelay)
+	workingDir, err := prepareTestDir(test, paths, projectRootDir)
 	if err != nil {
 		return err
 	}
 
-	err = runCmd(cmd)
+	cmd, err := getLazygitCommand(test, args, paths, projectRootDir, workingDir)
 	if err != nil {
 		return err
 	}
 
-	return HandleSnapshots(paths, logf, test, mode)
+	pid, err := args.RunCmd(cmd)
+
+	// Print race detector log regardless of the command's exit status
+	if args.RaceDetector {
+		logPath := fmt.Sprintf("%s.%d", raceDetectorLogsPath(), pid)
+		if bytes, err := os.ReadFile(logPath); err == nil {
+			args.Logf("Race detector log:\n" + string(bytes))
+		}
+	}
+
+	return err
 }
 
 func prepareTestDir(
 	test *IntegrationTest,
 	paths Paths,
-) error {
+	rootDir string,
+) (string, error) {
 	findOrCreateDir(paths.Root())
 	deleteAndRecreateEmptyDir(paths.Actual())
 
 	err := os.Mkdir(paths.ActualRepo(), 0o777)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	return createFixture(test, paths)
+	workingDir := createFixture(test, paths, rootDir)
+
+	return workingDir, nil
 }
 
-func buildLazygit() error {
+func buildLazygit(testArgs RunTestArgs) error {
+	args := []string{"go", "build"}
+	if testArgs.WaitForDebugger {
+		// Disable compiler optimizations (-N) and inlining (-l) because this
+		// makes debugging work better
+		args = append(args, "-gcflags=all=-N -l")
+	}
+	if testArgs.RaceDetector {
+		args = append(args, "-race")
+	}
+	if testArgs.CodeCoverageDir != "" {
+		args = append(args, "-cover")
+	}
+	args = append(args, "-o", tempLazygitPath(), filepath.FromSlash("pkg/integration/clients/injector/main.go"))
 	osCommand := oscommands.NewDummyOSCommand()
-	return osCommand.Cmd.New(fmt.Sprintf(
-		"go build -o %s pkg/integration/clients/injector/main.go", tempLazygitPath(),
-	)).Run()
+	return osCommand.Cmd.New(args).Run()
 }
 
-func createFixture(test *IntegrationTest, paths Paths) error {
-	shell := NewShell(paths.ActualRepo())
-	shell.RunCommand("git init -b master")
-	shell.RunCommand(`git config user.email "CI@example.com"`)
-	shell.RunCommand(`git config user.name "CI"`)
-	shell.RunCommand(`git config commit.gpgSign false`)
+// Sets up the fixture for test and returns the working directory to invoke
+// lazygit in.
+func createFixture(test *IntegrationTest, paths Paths, rootDir string) string {
+	env := NewTestEnvironment(rootDir)
+
+	env = append(env, fmt.Sprintf("%s=%s", PWD, paths.ActualRepo()))
+	shell := NewShell(
+		paths.ActualRepo(),
+		env,
+		func(errorMsg string) { panic(errorMsg) },
+	)
+	shell.Init()
 
 	test.SetupRepo(shell)
 
-	return nil
+	return shell.dir
 }
 
-func getLazygitCommand(test *IntegrationTest, paths Paths, rootDir string, mode Mode, keyPressDelay int) (*exec.Cmd, error) {
-	osCommand := oscommands.NewDummyOSCommand()
+func testPath(rootdir string) string {
+	return filepath.Join(rootdir, "test")
+}
 
-	templateConfigDir := filepath.Join(rootDir, "test", "default_test_config")
+func globalGitConfigPath(rootDir string) string {
+	return filepath.Join(testPath(rootDir), "global_git_config")
+}
+
+func getGitVersion() (*git_commands.GitVersion, error) {
+	osCommand := oscommands.NewDummyOSCommand()
+	cmdObj := osCommand.Cmd.New([]string{"git", "--version"})
+	versionStr, err := cmdObj.RunWithOutput()
+	if err != nil {
+		return nil, err
+	}
+	return git_commands.ParseGitVersion(versionStr)
+}
+
+func getLazygitCommand(
+	test *IntegrationTest,
+	args RunTestArgs,
+	paths Paths,
+	rootDir string,
+	workingDir string,
+) (*exec.Cmd, error) {
+	osCommand := oscommands.NewDummyOSCommand()
 
 	err := os.RemoveAll(paths.Config())
 	if err != nil {
 		return nil, err
 	}
+
+	templateConfigDir := filepath.Join(rootDir, "test", "default_test_config")
 	err = oscommands.CopyDir(templateConfigDir, paths.Config())
 	if err != nil {
 		return nil, err
 	}
 
-	cmdStr := fmt.Sprintf("%s -debug --use-config-dir=%s --path=%s %s", tempLazygitPath(), paths.Config(), paths.ActualRepo(), test.ExtraCmdArgs())
+	cmdArgs := []string{tempLazygitPath(), "-debug", "--use-config-dir=" + paths.Config()}
 
-	cmdObj := osCommand.Cmd.New(cmdStr)
+	resolvedExtraArgs := lo.Map(test.ExtraCmdArgs(), func(arg string, _ int) string {
+		return utils.ResolvePlaceholderString(arg, map[string]string{
+			"actualPath":     paths.Actual(),
+			"actualRepoPath": paths.ActualRepo(),
+		})
+	})
+	cmdArgs = append(cmdArgs, resolvedExtraArgs...)
+
+	// Use a limited environment for test isolation, including pass through
+	// of just allowed host environment variables
+	cmdObj := osCommand.Cmd.NewWithEnviron(cmdArgs, NewTestEnvironment(rootDir))
+
+	// Integration tests related to symlink behavior need a PWD that
+	// preserves symlinks. By default, SetWd will set a symlink-resolved
+	// value for PWD. Here, we override that with the path (that may)
+	// contain a symlink to simulate behavior in a user's shell correctly.
+	cmdObj.SetWd(workingDir)
+	cmdObj.AddEnvVars(fmt.Sprintf("%s=%s", PWD, workingDir))
+
+	cmdObj.AddEnvVars(fmt.Sprintf("%s=%s", LAZYGIT_ROOT_DIR, rootDir))
+
+	if args.CodeCoverageDir != "" {
+		// We set this explicitly here rather than inherit it from the test runner's
+		// environment because the test runner has its own coverage directory that
+		// it writes to and so if we pass GOCOVERDIR to that, it will be overwritten.
+		cmdObj.AddEnvVars("GOCOVERDIR=" + args.CodeCoverageDir)
+	}
 
 	cmdObj.AddEnvVars(fmt.Sprintf("%s=%s", TEST_NAME_ENV_VAR, test.Name()))
-	if mode == SANDBOX {
-		cmdObj.AddEnvVars(fmt.Sprintf("%s=%s", "SANDBOX", "true"))
+	if args.Sandbox {
+		cmdObj.AddEnvVars(fmt.Sprintf("%s=%s", SANDBOX_ENV_VAR, "true"))
+	}
+	if args.WaitForDebugger {
+		cmdObj.AddEnvVars(fmt.Sprintf("%s=true", WAIT_FOR_DEBUGGER_ENV_VAR))
+	}
+	// Set a race detector log path only to avoid spamming the terminal with the
+	// logs. We are not showing this anywhere yet.
+	cmdObj.AddEnvVars(fmt.Sprintf("GORACE=log_path=%s", raceDetectorLogsPath()))
+	if test.ExtraEnvVars() != nil {
+		for key, value := range test.ExtraEnvVars() {
+			cmdObj.AddEnvVars(fmt.Sprintf("%s=%s", key, value))
+		}
 	}
 
-	if keyPressDelay > 0 {
-		cmdObj.AddEnvVars(fmt.Sprintf("KEY_PRESS_DELAY=%d", keyPressDelay))
+	if args.InputDelay > 0 {
+		cmdObj.AddEnvVars(fmt.Sprintf("INPUT_DELAY=%d", args.InputDelay))
 	}
+
+	cmdObj.AddEnvVars(fmt.Sprintf("%s=%s", GIT_CONFIG_GLOBAL_ENV_VAR, globalGitConfigPath(rootDir)))
 
 	return cmdObj.GetCmd(), nil
 }
 
 func tempLazygitPath() string {
 	return filepath.Join("/tmp", "lazygit", "test_lazygit")
+}
+
+func raceDetectorLogsPath() string {
+	return filepath.Join("/tmp", "lazygit", "race_log")
 }
 
 func findOrCreateDir(path string) {
@@ -200,7 +283,7 @@ func findOrCreateDir(path string) {
 
 func deleteAndRecreateEmptyDir(path string) {
 	// remove contents of integration test directory
-	dir, err := ioutil.ReadDir(path)
+	dir, err := os.ReadDir(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			err = os.Mkdir(path, 0o777)

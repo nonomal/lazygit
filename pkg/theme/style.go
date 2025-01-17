@@ -17,6 +17,8 @@ func GetTextStyle(keys []string, background bool) style.TextStyle {
 			s = s.SetReverse()
 		case "underline":
 			s = s.SetUnderline()
+		case "strikethrough":
+			s = s.SetStrikethrough()
 		default:
 			value, present := style.ColorMap[key]
 			if present {
@@ -30,9 +32,9 @@ func GetTextStyle(keys []string, background bool) style.TextStyle {
 			} else if utils.IsValidHexValue(key) {
 				c := style.NewRGBColor(color.HEX(key, background))
 				if background {
-					s.SetBg(c)
+					s = s.SetBg(c)
 				} else {
-					s.SetFg(c)
+					s = s.SetFg(c)
 				}
 			}
 		}

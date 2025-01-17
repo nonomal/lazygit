@@ -1,22 +1,18 @@
 package helpers
 
 import (
-	"github.com/jesseduffield/generics/set"
-	"github.com/jesseduffield/generics/slices"
-	"github.com/jesseduffield/lazygit/pkg/commands"
+	"strconv"
+
+	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
-	"github.com/jesseduffield/lazygit/pkg/gui/context"
 	"github.com/jesseduffield/lazygit/pkg/gui/modes/cherrypicking"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
+	"github.com/jesseduffield/lazygit/pkg/utils"
+	"github.com/samber/lo"
 )
 
 type CherryPickHelper struct {
-	c *types.HelperCommon
-
-	git *commands.GitCommand
-
-	contexts *context.ContextTree
-	getData  func() *cherrypicking.CherryPicking
+	c *HelperCommon
 
 	rebaseHelper *MergeAndRebaseHelper
 }
@@ -25,106 +21,118 @@ type CherryPickHelper struct {
 // even if in truth we're running git cherry-pick
 
 func NewCherryPickHelper(
-	c *types.HelperCommon,
-	git *commands.GitCommand,
-	contexts *context.ContextTree,
-	getData func() *cherrypicking.CherryPicking,
+	c *HelperCommon,
 	rebaseHelper *MergeAndRebaseHelper,
 ) *CherryPickHelper {
 	return &CherryPickHelper{
 		c:            c,
-		git:          git,
-		contexts:     contexts,
-		getData:      getData,
 		rebaseHelper: rebaseHelper,
 	}
 }
 
-func (self *CherryPickHelper) Copy(commit *models.Commit, commitsList []*models.Commit, context types.Context) error {
-	if err := self.resetIfNecessary(context); err != nil {
-		return err
-	}
-
-	// we will un-copy it if it's already copied
-	for index, cherryPickedCommit := range self.getData().CherryPickedCommits {
-		if commit.Sha == cherryPickedCommit.Sha {
-			self.getData().CherryPickedCommits = append(
-				self.getData().CherryPickedCommits[0:index],
-				self.getData().CherryPickedCommits[index+1:]...,
-			)
-			return self.rerender()
-		}
-	}
-
-	self.add(commit, commitsList)
-	return self.rerender()
+func (self *CherryPickHelper) getData() *cherrypicking.CherryPicking {
+	return self.c.Modes().CherryPicking
 }
 
-func (self *CherryPickHelper) CopyRange(selectedIndex int, commitsList []*models.Commit, context types.Context) error {
+func (self *CherryPickHelper) CopyRange(commitsList []*models.Commit, context types.IListContext) error {
+	startIdx, endIdx := context.GetList().GetSelectionRange()
+
 	if err := self.resetIfNecessary(context); err != nil {
 		return err
 	}
 
-	commitSet := self.CherryPickedCommitShaSet()
+	commitSet := self.getData().SelectedHashSet()
 
-	// find the last commit that is copied that's above our position
-	// if there are none, startIndex = 0
-	startIndex := 0
-	for index, commit := range commitsList[0:selectedIndex] {
-		if commitSet.Includes(commit.Sha) {
-			startIndex = index
+	allCommitsCopied := lo.EveryBy(commitsList[startIdx:endIdx+1], func(commit *models.Commit) bool {
+		return commitSet.Includes(commit.Hash)
+	})
+
+	// if all selected commits are already copied, we'll uncopy them
+	if allCommitsCopied {
+		for index := startIdx; index <= endIdx; index++ {
+			commit := commitsList[index]
+			self.getData().Remove(commit, commitsList)
+		}
+	} else {
+		for index := startIdx; index <= endIdx; index++ {
+			commit := commitsList[index]
+			self.getData().Add(commit, commitsList)
 		}
 	}
 
-	for index := startIndex; index <= selectedIndex; index++ {
-		commit := commitsList[index]
-		self.add(commit, commitsList)
-	}
+	self.getData().DidPaste = false
 
-	return self.rerender()
+	self.rerender()
+	return nil
 }
 
 // HandlePasteCommits begins a cherry-pick rebase with the commits the user has copied.
 // Only to be called from the branch commits controller
 func (self *CherryPickHelper) Paste() error {
-	return self.c.Confirm(types.ConfirmOpts{
-		Title:  self.c.Tr.CherryPick,
-		Prompt: self.c.Tr.SureCherryPick,
+	self.c.Confirm(types.ConfirmOpts{
+		Title: self.c.Tr.CherryPick,
+		Prompt: utils.ResolvePlaceholderString(
+			self.c.Tr.SureCherryPick,
+			map[string]string{
+				"numCommits": strconv.Itoa(len(self.getData().CherryPickedCommits)),
+			}),
 		HandleConfirm: func() error {
-			return self.c.WithWaitingStatus(self.c.Tr.CherryPickingStatus, func() error {
+			isInRebase, err := self.c.Git().Status.IsInInteractiveRebase()
+			if err != nil {
+				return err
+			}
+			if isInRebase {
+				if err := self.c.Git().Rebase.CherryPickCommitsDuringRebase(self.getData().CherryPickedCommits); err != nil {
+					return err
+				}
+				err = self.c.Refresh(types.RefreshOptions{
+					Mode: types.SYNC, Scope: []types.RefreshableView{types.REBASE_COMMITS},
+				})
+				if err != nil {
+					return err
+				}
+
+				return self.Reset()
+			}
+
+			return self.c.WithWaitingStatus(self.c.Tr.CherryPickingStatus, func(gocui.Task) error {
 				self.c.LogAction(self.c.Tr.Actions.CherryPick)
-				err := self.git.Rebase.CherryPickCommits(self.getData().CherryPickedCommits)
-				return self.rebaseHelper.CheckMergeOrRebase(err)
+				err := self.c.Git().Rebase.CherryPickCommits(self.getData().CherryPickedCommits)
+				err = self.rebaseHelper.CheckMergeOrRebase(err)
+				if err != nil {
+					return err
+				}
+
+				// If we're in an interactive rebase at this point, it must
+				// be because there were conflicts. Don't clear the copied
+				// commits in this case, since we might want to abort and
+				// try pasting them again.
+				isInRebase, err = self.c.Git().Status.IsInInteractiveRebase()
+				if err != nil {
+					return err
+				}
+				if !isInRebase {
+					self.getData().DidPaste = true
+					self.rerender()
+				}
+				return nil
 			})
 		},
 	})
+
+	return nil
+}
+
+func (self *CherryPickHelper) CanPaste() bool {
+	return self.getData().CanPaste()
 }
 
 func (self *CherryPickHelper) Reset() error {
 	self.getData().ContextKey = ""
 	self.getData().CherryPickedCommits = nil
 
-	return self.rerender()
-}
-
-func (self *CherryPickHelper) CherryPickedCommitShaSet() *set.Set[string] {
-	shas := slices.Map(self.getData().CherryPickedCommits, func(commit *models.Commit) string {
-		return commit.Sha
-	})
-	return set.NewFromSlice(shas)
-}
-
-func (self *CherryPickHelper) add(selectedCommit *models.Commit, commitsList []*models.Commit) {
-	commitSet := self.CherryPickedCommitShaSet()
-	commitSet.Add(selectedCommit.Sha)
-
-	cherryPickedCommits := slices.Filter(commitsList, func(commit *models.Commit) bool {
-		return commitSet.Includes(commit.Sha)
-	})
-
-	self.getData().CherryPickedCommits = slices.Map(cherryPickedCommits, func(commit *models.Commit) *models.Commit {
-		return &models.Commit{Name: commit.Name, Sha: commit.Sha}
-	})
+	self.rerender()
+	return nil
 }
 
 // you can only copy from one context at a time, because the order and position of commits matter
@@ -140,16 +148,12 @@ func (self *CherryPickHelper) resetIfNecessary(context types.Context) error {
 	return nil
 }
 
-func (self *CherryPickHelper) rerender() error {
+func (self *CherryPickHelper) rerender() {
 	for _, context := range []types.Context{
-		self.contexts.LocalCommits,
-		self.contexts.ReflogCommits,
-		self.contexts.SubCommits,
+		self.c.Contexts().LocalCommits,
+		self.c.Contexts().ReflogCommits,
+		self.c.Contexts().SubCommits,
 	} {
-		if err := self.c.PostRefreshUpdate(context); err != nil {
-			return err
-		}
+		self.c.PostRefreshUpdate(context)
 	}
-
-	return nil
 }

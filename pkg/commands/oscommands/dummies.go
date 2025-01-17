@@ -19,6 +19,7 @@ type OSCommandDeps struct {
 	GetenvFn     func(string) string
 	RemoveFileFn func(string) error
 	Cmd          *CmdObjBuilder
+	TempDir      string
 }
 
 func NewDummyOSCommandWithDeps(deps OSCommandDeps) *OSCommand {
@@ -38,6 +39,7 @@ func NewDummyOSCommandWithDeps(deps OSCommandDeps) *OSCommand {
 		getenvFn:     deps.GetenvFn,
 		removeFileFn: deps.RemoveFileFn,
 		guiIO:        NewNullGuiIO(utils.NewDummyLog()),
+		tempDir:      deps.TempDir,
 	}
 }
 
@@ -49,11 +51,14 @@ func NewDummyCmdObjBuilder(runner ICmdObjRunner) *CmdObjBuilder {
 }
 
 var dummyPlatform = &Platform{
-	OS:              "darwin",
-	Shell:           "bash",
-	ShellArg:        "-c",
-	OpenCommand:     "open {{filename}}",
-	OpenLinkCommand: "open {{link}}",
+	OS:                   "darwin",
+	Shell:                "bash",
+	InteractiveShell:     "bash",
+	ShellArg:             "-c",
+	InteractiveShellArg:  "-i",
+	InteractiveShellExit: "; exit $?",
+	OpenCommand:          "open {{filename}}",
+	OpenLinkCommand:      "open {{link}}",
 }
 
 func NewDummyOSCommandWithRunner(runner *FakeCmdObjRunner) *OSCommand {

@@ -1,57 +1,45 @@
 package context
 
 import (
-	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
+	"github.com/jesseduffield/lazygit/pkg/gui/presentation"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
 )
 
 type SubmodulesContext struct {
-	*BasicViewModel[*models.SubmoduleConfig]
+	*FilteredListViewModel[*models.SubmoduleConfig]
 	*ListContextTrait
 }
 
 var _ types.IListContext = (*SubmodulesContext)(nil)
 
-func NewSubmodulesContext(
-	getModel func() []*models.SubmoduleConfig,
-	view *gocui.View,
-	getDisplayStrings func(startIdx int, length int) [][]string,
+func NewSubmodulesContext(c *ContextCommon) *SubmodulesContext {
+	viewModel := NewFilteredListViewModel(
+		func() []*models.SubmoduleConfig { return c.Model().Submodules },
+		func(submodule *models.SubmoduleConfig) []string {
+			return []string{submodule.FullName()}
+		},
+	)
 
-	onFocus func(types.OnFocusOpts) error,
-	onRenderToMain func() error,
-	onFocusLost func(opts types.OnFocusLostOpts) error,
-
-	c *types.HelperCommon,
-) *SubmodulesContext {
-	viewModel := NewBasicViewModel(getModel)
+	getDisplayStrings := func(_ int, _ int) [][]string {
+		return presentation.GetSubmoduleListDisplayStrings(viewModel.GetItems())
+	}
 
 	return &SubmodulesContext{
-		BasicViewModel: viewModel,
+		FilteredListViewModel: viewModel,
 		ListContextTrait: &ListContextTrait{
 			Context: NewSimpleContext(NewBaseContext(NewBaseContextOpts{
-				View:       view,
+				View:       c.Views().Submodules,
 				WindowName: "files",
 				Key:        SUBMODULES_CONTEXT_KEY,
 				Kind:       types.SIDE_CONTEXT,
 				Focusable:  true,
-			}), ContextCallbackOpts{
-				OnFocus:        onFocus,
-				OnFocusLost:    onFocusLost,
-				OnRenderToMain: onRenderToMain,
-			}),
-			list:              viewModel,
-			getDisplayStrings: getDisplayStrings,
-			c:                 c,
+			})),
+			ListRenderer: ListRenderer{
+				list:              viewModel,
+				getDisplayStrings: getDisplayStrings,
+			},
+			c: c,
 		},
 	}
-}
-
-func (self *SubmodulesContext) GetSelectedItemId() string {
-	item := self.GetSelected()
-	if item == nil {
-		return ""
-	}
-
-	return item.ID()
 }

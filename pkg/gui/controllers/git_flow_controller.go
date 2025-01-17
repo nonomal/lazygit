@@ -1,27 +1,34 @@
 package controllers
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
-	"github.com/jesseduffield/lazygit/pkg/gui/context"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
 	"github.com/jesseduffield/lazygit/pkg/utils"
 )
 
 type GitFlowController struct {
 	baseController
-	*controllerCommon
+	*ListControllerTrait[*models.Branch]
+	c *ControllerCommon
 }
 
 var _ types.IController = &GitFlowController{}
 
 func NewGitFlowController(
-	common *controllerCommon,
+	c *ControllerCommon,
 ) *GitFlowController {
 	return &GitFlowController{
-		baseController:   baseController{},
-		controllerCommon: common,
+		baseController: baseController{},
+		ListControllerTrait: NewListControllerTrait[*models.Branch](
+			c,
+			c.Contexts().Branches,
+			c.Contexts().Branches.GetSelected,
+			c.Contexts().Branches.GetSelectedItems,
+		),
+		c: c,
 	}
 }
 
@@ -29,8 +36,8 @@ func (self *GitFlowController) GetKeybindings(opts types.KeybindingsOpts) []*typ
 	bindings := []*types.Binding{
 		{
 			Key:         opts.GetKey(opts.Config.Branches.ViewGitFlowOptions),
-			Handler:     self.checkSelected(self.handleCreateGitFlowMenu),
-			Description: self.c.Tr.LcGitFlowOptions,
+			Handler:     self.withItem(self.handleCreateGitFlowMenu),
+			Description: self.c.Tr.GitFlowOptions,
 			OpensMenu:   true,
 		},
 	}
@@ -39,23 +46,25 @@ func (self *GitFlowController) GetKeybindings(opts types.KeybindingsOpts) []*typ
 }
 
 func (self *GitFlowController) handleCreateGitFlowMenu(branch *models.Branch) error {
-	if !self.git.Flow.GitFlowEnabled() {
-		return self.c.ErrorMsg("You need to install git-flow and enable it in this repo to use git-flow features")
+	if !self.c.Git().Flow.GitFlowEnabled() {
+		return errors.New("You need to install git-flow and enable it in this repo to use git-flow features")
 	}
 
 	startHandler := func(branchType string) func() error {
 		return func() error {
 			title := utils.ResolvePlaceholderString(self.c.Tr.NewGitFlowBranchPrompt, map[string]string{"branchType": branchType})
 
-			return self.c.Prompt(types.PromptOpts{
+			self.c.Prompt(types.PromptOpts{
 				Title: title,
 				HandleConfirm: func(name string) error {
 					self.c.LogAction(self.c.Tr.Actions.GitFlowStart)
 					return self.c.RunSubprocessAndRefresh(
-						self.git.Flow.StartCmdObj(branchType, name),
+						self.c.Git().Flow.StartCmdObj(branchType, name),
 					)
 				},
 			})
+
+			return nil
 		}
 	}
 
@@ -68,6 +77,7 @@ func (self *GitFlowController) handleCreateGitFlowMenu(branch *models.Branch) er
 				OnPress: func() error {
 					return self.gitFlowFinishBranch(branch.Name)
 				},
+				DisabledReason: self.require(self.singleItemSelected())(),
 			},
 			{
 				Label:   "start feature",
@@ -94,30 +104,11 @@ func (self *GitFlowController) handleCreateGitFlowMenu(branch *models.Branch) er
 }
 
 func (self *GitFlowController) gitFlowFinishBranch(branchName string) error {
-	cmdObj, err := self.git.Flow.FinishCmdObj(branchName)
+	cmdObj, err := self.c.Git().Flow.FinishCmdObj(branchName)
 	if err != nil {
-		return self.c.Error(err)
+		return err
 	}
 
 	self.c.LogAction(self.c.Tr.Actions.GitFlowFinish)
 	return self.c.RunSubprocessAndRefresh(cmdObj)
-}
-
-func (self *GitFlowController) checkSelected(callback func(*models.Branch) error) func() error {
-	return func() error {
-		node := self.context().GetSelected()
-		if node == nil {
-			return nil
-		}
-
-		return callback(node)
-	}
-}
-
-func (self *GitFlowController) Context() types.Context {
-	return self.context()
-}
-
-func (self *GitFlowController) context() *context.BranchesContext {
-	return self.contexts.Branches
 }

@@ -1,8 +1,6 @@
 package git_commands
 
-import (
-	"fmt"
-)
+import "github.com/jesseduffield/gocui"
 
 type TagCommands struct {
 	*GitCommon
@@ -14,18 +12,45 @@ func NewTagCommands(gitCommon *GitCommon) *TagCommands {
 	}
 }
 
-func (self *TagCommands) CreateLightweight(tagName string, commitSha string) error {
-	return self.cmd.New(fmt.Sprintf("git tag -- %s %s", self.cmd.Quote(tagName), commitSha)).Run()
+func (self *TagCommands) CreateLightweight(tagName string, ref string, force bool) error {
+	cmdArgs := NewGitCmd("tag").
+		ArgIf(force, "--force").
+		Arg("--", tagName).
+		ArgIf(len(ref) > 0, ref).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
-func (self *TagCommands) CreateAnnotated(tagName, commitSha, msg string) error {
-	return self.cmd.New(fmt.Sprintf("git tag %s %s -m %s", tagName, commitSha, self.cmd.Quote(msg))).Run()
+func (self *TagCommands) CreateAnnotated(tagName, ref, msg string, force bool) error {
+	cmdArgs := NewGitCmd("tag").Arg(tagName).
+		ArgIf(force, "--force").
+		ArgIf(len(ref) > 0, ref).
+		Arg("-m", msg).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
-func (self *TagCommands) Delete(tagName string) error {
-	return self.cmd.New(fmt.Sprintf("git tag -d %s", self.cmd.Quote(tagName))).Run()
+func (self *TagCommands) HasTag(tagName string) bool {
+	cmdArgs := NewGitCmd("show-ref").
+		Arg("--tags", "--quiet", "--verify", "--").
+		Arg("refs/tags/" + tagName).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run() == nil
 }
 
-func (self *TagCommands) Push(remoteName string, tagName string) error {
-	return self.cmd.New(fmt.Sprintf("git push %s %s", self.cmd.Quote(remoteName), self.cmd.Quote(tagName))).PromptOnCredentialRequest().WithMutex(self.syncMutex).Run()
+func (self *TagCommands) LocalDelete(tagName string) error {
+	cmdArgs := NewGitCmd("tag").Arg("-d", tagName).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
+}
+
+func (self *TagCommands) Push(task gocui.Task, remoteName string, tagName string) error {
+	cmdArgs := NewGitCmd("push").Arg(remoteName, "tag", tagName).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).PromptOnCredentialRequest(task).Run()
 }

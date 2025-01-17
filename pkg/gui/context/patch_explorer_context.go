@@ -9,45 +9,62 @@ import (
 
 type PatchExplorerContext struct {
 	*SimpleContext
+	*SearchTrait
 
 	state                  *patch_exploring.State
 	viewTrait              *ViewTrait
 	getIncludedLineIndices func() []int
-	c                      *types.HelperCommon
+	c                      *ContextCommon
 	mutex                  *deadlock.Mutex
 }
 
-var _ types.IPatchExplorerContext = (*PatchExplorerContext)(nil)
+var (
+	_ types.IPatchExplorerContext = (*PatchExplorerContext)(nil)
+	_ types.ISearchableContext    = (*PatchExplorerContext)(nil)
+)
 
 func NewPatchExplorerContext(
 	view *gocui.View,
 	windowName string,
 	key types.ContextKey,
 
-	onFocus func(types.OnFocusOpts) error,
-	onFocusLost func(opts types.OnFocusLostOpts) error,
 	getIncludedLineIndices func() []int,
 
-	c *types.HelperCommon,
+	c *ContextCommon,
 ) *PatchExplorerContext {
-	return &PatchExplorerContext{
+	ctx := &PatchExplorerContext{
 		state:                  nil,
 		viewTrait:              NewViewTrait(view),
 		c:                      c,
 		mutex:                  &deadlock.Mutex{},
 		getIncludedLineIndices: getIncludedLineIndices,
 		SimpleContext: NewSimpleContext(NewBaseContext(NewBaseContextOpts{
-			View:       view,
-			WindowName: windowName,
-			Key:        key,
-			Kind:       types.MAIN_CONTEXT,
-			Focusable:  true,
-		}), ContextCallbackOpts{
-			OnFocus:     onFocus,
-			OnFocusLost: onFocusLost,
-		}),
+			View:                       view,
+			WindowName:                 windowName,
+			Key:                        key,
+			Kind:                       types.MAIN_CONTEXT,
+			Focusable:                  true,
+			HighlightOnFocus:           true,
+			NeedsRerenderOnWidthChange: types.NEEDS_RERENDER_ON_WIDTH_CHANGE_WHEN_WIDTH_CHANGES,
+		})),
+		SearchTrait: NewSearchTrait(c),
 	}
+
+	ctx.GetView().SetOnSelectItem(ctx.SearchTrait.onSelectItemWrapper(
+		func(selectedLineIdx int) error {
+			ctx.GetMutex().Lock()
+			defer ctx.GetMutex().Unlock()
+			ctx.NavigateTo(selectedLineIdx)
+			return nil
+		}),
+	)
+
+	ctx.SetHandleRenderFunc(ctx.OnViewWidthChanged)
+
+	return ctx
 }
+
+func (self *PatchExplorerContext) IsPatchExplorerContext() {}
 
 func (self *PatchExplorerContext) GetState() *patch_exploring.State {
 	return self.state
@@ -65,64 +82,72 @@ func (self *PatchExplorerContext) GetIncludedLineIndices() []int {
 	return self.getIncludedLineIndices()
 }
 
-func (self *PatchExplorerContext) RenderAndFocus(isFocused bool) error {
-	self.setContent(isFocused)
+func (self *PatchExplorerContext) RenderAndFocus() {
+	self.setContent()
 
-	self.focusSelection()
+	self.FocusSelection()
 	self.c.Render()
-
-	return nil
 }
 
-func (self *PatchExplorerContext) Render(isFocused bool) error {
-	self.setContent(isFocused)
+func (self *PatchExplorerContext) Render() {
+	self.setContent()
 
 	self.c.Render()
-
-	return nil
 }
 
-func (self *PatchExplorerContext) Focus() error {
-	self.focusSelection()
+func (self *PatchExplorerContext) Focus() {
+	self.FocusSelection()
 	self.c.Render()
-
-	return nil
 }
 
-func (self *PatchExplorerContext) setContent(isFocused bool) {
-	self.GetView().SetContent(self.GetContentToRender(isFocused))
+func (self *PatchExplorerContext) setContent() {
+	self.GetView().SetContent(self.GetContentToRender())
 }
 
-func (self *PatchExplorerContext) focusSelection() {
+func (self *PatchExplorerContext) FocusSelection() {
 	view := self.GetView()
 	state := self.GetState()
-	_, viewHeight := view.Size()
-	bufferHeight := viewHeight - 1
+	bufferHeight := view.InnerHeight()
 	_, origin := view.Origin()
+	numLines := view.ViewLinesHeight()
 
-	selectedLineIdx := state.GetSelectedLineIdx()
+	newOriginY := state.CalculateOrigin(origin, bufferHeight, numLines)
 
-	newOrigin := state.CalculateOrigin(origin, bufferHeight)
+	view.SetOriginY(newOriginY)
 
-	_ = view.SetOriginY(newOrigin)
-	_ = view.SetCursor(0, selectedLineIdx-newOrigin)
+	startIdx, endIdx := state.SelectedViewRange()
+	// As far as the view is concerned, we are always selecting a range
+	view.SetRangeSelectStart(startIdx)
+	view.SetCursorY(endIdx - newOriginY)
 }
 
-func (self *PatchExplorerContext) GetContentToRender(isFocused bool) string {
+func (self *PatchExplorerContext) GetContentToRender() string {
 	if self.GetState() == nil {
 		return ""
 	}
 
-	return self.GetState().RenderForLineIndices(isFocused, self.GetIncludedLineIndices())
+	return self.GetState().RenderForLineIndices(self.GetIncludedLineIndices())
 }
 
-func (self *PatchExplorerContext) NavigateTo(isFocused bool, selectedLineIdx int) error {
+func (self *PatchExplorerContext) NavigateTo(selectedLineIdx int) {
 	self.GetState().SetLineSelectMode()
 	self.GetState().SelectLine(selectedLineIdx)
 
-	return self.RenderAndFocus(isFocused)
+	self.RenderAndFocus()
 }
 
 func (self *PatchExplorerContext) GetMutex() *deadlock.Mutex {
 	return self.mutex
+}
+
+func (self *PatchExplorerContext) ModelSearchResults(searchStr string, caseSensitive bool) []gocui.SearchPosition {
+	return nil
+}
+
+func (self *PatchExplorerContext) OnViewWidthChanged() {
+	if state := self.GetState(); state != nil {
+		state.OnViewWidthChanged(self.GetView())
+		self.setContent()
+		self.RenderAndFocus()
+	}
 }

@@ -1,41 +1,19 @@
 package helpers
 
 import (
-	"fmt"
-
-	"github.com/jesseduffield/lazygit/pkg/commands"
 	"github.com/jesseduffield/lazygit/pkg/gui/context"
-	"github.com/jesseduffield/lazygit/pkg/gui/keybindings"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
 )
 
 type MergeConflictsHelper struct {
-	c        *types.HelperCommon
-	contexts *context.ContextTree
-	git      *commands.GitCommand
+	c *HelperCommon
 }
 
 func NewMergeConflictsHelper(
-	c *types.HelperCommon,
-	contexts *context.ContextTree,
-	git *commands.GitCommand,
+	c *HelperCommon,
 ) *MergeConflictsHelper {
 	return &MergeConflictsHelper{
-		c:        c,
-		contexts: contexts,
-		git:      git,
-	}
-}
-
-func (self *MergeConflictsHelper) GetMergingOptions() map[string]string {
-	keybindingConfig := self.c.UserConfig.Keybinding
-
-	return map[string]string{
-		fmt.Sprintf("%s %s", keybindings.Label(keybindingConfig.Universal.PrevItem), keybindings.Label(keybindingConfig.Universal.NextItem)):   self.c.Tr.LcSelectHunk,
-		fmt.Sprintf("%s %s", keybindings.Label(keybindingConfig.Universal.PrevBlock), keybindings.Label(keybindingConfig.Universal.NextBlock)): self.c.Tr.LcNavigateConflicts,
-		keybindings.Label(keybindingConfig.Universal.Select):   self.c.Tr.LcPickHunk,
-		keybindings.Label(keybindingConfig.Main.PickBothHunks): self.c.Tr.LcPickAllHunks,
-		keybindings.Label(keybindingConfig.Universal.Undo):     self.c.Tr.LcUndo,
+		c: c,
 	}
 }
 
@@ -47,7 +25,7 @@ func (self *MergeConflictsHelper) SetMergeState(path string) (bool, error) {
 }
 
 func (self *MergeConflictsHelper) setMergeStateWithoutLock(path string) (bool, error) {
-	content, err := self.git.File.Cat(path)
+	content, err := self.c.Git().File.Cat(path)
 	if err != nil {
 		return false, err
 	}
@@ -78,19 +56,27 @@ func (self *MergeConflictsHelper) EscapeMerge() error {
 
 	// doing this in separate UI thread so that we're not still holding the lock by the time refresh the file
 	self.c.OnUIThread(func() error {
-		return self.c.PushContext(self.contexts.Files)
+		// There is a race condition here: refreshing the files scope can trigger the
+		// confirmation context to be pushed if all conflicts are resolved (prompting
+		// to continue the merge/rebase. In that case, we don't want to then push the
+		// files context over it.
+		// So long as both places call OnUIThread, we're fine.
+		if self.c.Context().IsCurrent(self.c.Contexts().MergeConflicts) {
+			self.c.Context().Push(self.c.Contexts().Files)
+		}
+		return nil
 	})
 	return nil
 }
 
-func (self *MergeConflictsHelper) SetConflictsAndRender(path string, isFocused bool) (bool, error) {
+func (self *MergeConflictsHelper) SetConflictsAndRender(path string) (bool, error) {
 	hasConflicts, err := self.setMergeStateWithoutLock(path)
 	if err != nil {
 		return false, err
 	}
 
 	if hasConflicts {
-		return true, self.context().Render(isFocused)
+		return true, self.context().Render()
 	}
 
 	return false, nil
@@ -107,9 +93,49 @@ func (self *MergeConflictsHelper) SwitchToMerge(path string) error {
 		}
 	}
 
-	return self.c.PushContext(self.contexts.MergeConflicts)
+	self.c.Context().Push(self.c.Contexts().MergeConflicts)
+	return nil
 }
 
 func (self *MergeConflictsHelper) context() *context.MergeConflictsContext {
-	return self.contexts.MergeConflicts
+	return self.c.Contexts().MergeConflicts
+}
+
+func (self *MergeConflictsHelper) Render() {
+	content := self.context().GetContentToRender()
+
+	var task types.UpdateTask
+	if self.context().IsUserScrolling() {
+		task = types.NewRenderStringWithoutScrollTask(content)
+	} else {
+		originY := self.context().GetOriginY()
+		task = types.NewRenderStringWithScrollTask(content, 0, originY)
+	}
+
+	self.c.RenderToMainViews(types.RefreshMainOpts{
+		Pair: self.c.MainViewPairs().MergeConflicts,
+		Main: &types.ViewUpdateOpts{
+			Task: task,
+		},
+	})
+}
+
+func (self *MergeConflictsHelper) RefreshMergeState() error {
+	self.c.Contexts().MergeConflicts.GetMutex().Lock()
+	defer self.c.Contexts().MergeConflicts.GetMutex().Unlock()
+
+	if self.c.Context().Current().GetKey() != context.MERGE_CONFLICTS_CONTEXT_KEY {
+		return nil
+	}
+
+	hasConflicts, err := self.SetConflictsAndRender(self.c.Contexts().MergeConflicts.GetState().GetPath())
+	if err != nil {
+		return err
+	}
+
+	if !hasConflicts {
+		return self.EscapeMerge()
+	}
+
+	return nil
 }

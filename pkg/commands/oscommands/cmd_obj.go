@@ -2,7 +2,10 @@ package oscommands
 
 import (
 	"os/exec"
+	"strings"
 
+	"github.com/jesseduffield/gocui"
+	"github.com/samber/lo"
 	"github.com/sasha-s/go-deadlock"
 )
 
@@ -15,8 +18,14 @@ type ICmdObj interface {
 	// into a terminal e.g. 'sh -c git commit' as opposed to 'sh -c "git commit"'
 	ToString() string
 
+	// outputs args vector e.g. ["git", "commit", "-m", "my message"]
+	Args() []string
+
 	AddEnvVars(...string) ICmdObj
 	GetEnvVars() []string
+
+	// sets the working directory
+	SetWd(string) ICmdObj
 
 	// runs the command and returns an error if any
 	Run() error
@@ -51,18 +60,20 @@ type ICmdObj interface {
 	// returns true if IgnoreEmptyError() was called
 	ShouldIgnoreEmptyError() bool
 
-	PromptOnCredentialRequest() ICmdObj
+	PromptOnCredentialRequest(task gocui.Task) ICmdObj
 	FailOnCredentialRequest() ICmdObj
 
 	WithMutex(mutex *deadlock.Mutex) ICmdObj
 	Mutex() *deadlock.Mutex
 
 	GetCredentialStrategy() CredentialStrategy
+	GetTask() gocui.Task
+
+	Clone() ICmdObj
 }
 
 type CmdObj struct {
-	cmdStr string
-	cmd    *exec.Cmd
+	cmd *exec.Cmd
 
 	runner ICmdObjRunner
 
@@ -77,6 +88,7 @@ type CmdObj struct {
 
 	// if set to true, it means we might be asked to enter a username/password by this command.
 	credentialStrategy CredentialStrategy
+	task               gocui.Task
 
 	// can be set so that we don't run certain commands simultaneously
 	mutex *deadlock.Mutex
@@ -104,7 +116,19 @@ func (self *CmdObj) GetCmd() *exec.Cmd {
 }
 
 func (self *CmdObj) ToString() string {
-	return self.cmdStr
+	// if a given arg contains a space, we need to wrap it in quotes
+	quotedArgs := lo.Map(self.cmd.Args, func(arg string, _ int) string {
+		if strings.Contains(arg, " ") {
+			return `"` + arg + `"`
+		}
+		return arg
+	})
+
+	return strings.Join(quotedArgs, " ")
+}
+
+func (self *CmdObj) Args() []string {
+	return self.cmd.Args
 }
 
 func (self *CmdObj) AddEnvVars(vars ...string) ICmdObj {
@@ -115,6 +139,12 @@ func (self *CmdObj) AddEnvVars(vars ...string) ICmdObj {
 
 func (self *CmdObj) GetEnvVars() []string {
 	return self.cmd.Env
+}
+
+func (self *CmdObj) SetWd(wd string) ICmdObj {
+	self.cmd.Dir = wd
+
+	return self
 }
 
 func (self *CmdObj) DontLog() ICmdObj {
@@ -172,8 +202,9 @@ func (self *CmdObj) RunAndProcessLines(onLine func(line string) (bool, error)) e
 	return self.runner.RunAndProcessLines(self, onLine)
 }
 
-func (self *CmdObj) PromptOnCredentialRequest() ICmdObj {
+func (self *CmdObj) PromptOnCredentialRequest(task gocui.Task) ICmdObj {
 	self.credentialStrategy = PROMPT
+	self.task = task
 
 	return self
 }
@@ -186,4 +217,22 @@ func (self *CmdObj) FailOnCredentialRequest() ICmdObj {
 
 func (self *CmdObj) GetCredentialStrategy() CredentialStrategy {
 	return self.credentialStrategy
+}
+
+func (self *CmdObj) GetTask() gocui.Task {
+	return self.task
+}
+
+func (self *CmdObj) Clone() ICmdObj {
+	clone := &CmdObj{}
+	*clone = *self
+	clone.cmd = cloneCmd(self.cmd)
+	return clone
+}
+
+func cloneCmd(cmd *exec.Cmd) *exec.Cmd {
+	clone := &exec.Cmd{}
+	*clone = *cmd
+
+	return clone
 }

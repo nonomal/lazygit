@@ -1,10 +1,12 @@
-// This "script" generates a file called Keybindings_{{.LANG}}.md
-// in current working directory.
+//go:generate go run generator.go
+
+// This "script" generates files called Keybindings_{{.LANG}}.md
+// in the docs/keybindings directory.
 //
-// The content of this generated file is a keybindings cheatsheet.
+// The content of these generated files is a keybindings cheatsheet.
 //
-// To generate cheatsheet in english run:
-//   go run scripts/generate_cheatsheet.go
+// To generate the cheatsheets, run:
+//   go generate pkg/cheatsheet/generate.go
 
 package cheatsheet
 
@@ -14,7 +16,6 @@ import (
 	"os"
 
 	"github.com/jesseduffield/generics/maps"
-	"github.com/jesseduffield/generics/slices"
 	"github.com/jesseduffield/lazycore/pkg/utils"
 	"github.com/jesseduffield/lazygit/pkg/app"
 	"github.com/jesseduffield/lazygit/pkg/config"
@@ -22,6 +23,7 @@ import (
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
 	"github.com/jesseduffield/lazygit/pkg/i18n"
 	"github.com/samber/lo"
+	"golang.org/x/exp/slices"
 )
 
 type bindingSection struct {
@@ -41,7 +43,7 @@ type headerWithBindings struct {
 }
 
 func CommandToRun() string {
-	return "go run scripts/cheatsheet/main.go generate"
+	return "go generate ./..."
 }
 
 func GetKeybindingsDir() string {
@@ -49,7 +51,10 @@ func GetKeybindingsDir() string {
 }
 
 func generateAtDir(cheatsheetDir string) {
-	translationSetsByLang := i18n.GetTranslationSets()
+	translationSetsByLang, err := i18n.GetTranslationSets()
+	if err != nil {
+		log.Fatal(err)
+	}
 	mConfig := config.NewDummyAppConfig()
 
 	for lang := range translationSetsByLang {
@@ -58,7 +63,12 @@ func generateAtDir(cheatsheetDir string) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		mApp, _ := app.NewApp(mConfig, common)
+		tr, err := i18n.NewTranslationSetFromConfig(common.Log, lang)
+		if err != nil {
+			log.Fatal(err)
+		}
+		common.Tr = tr
+		mApp, _ := app.NewApp(mConfig, nil, common)
 		path := cheatsheetDir + "/Keybindings_" + lang + ".md"
 		file, err := os.Create(path)
 		if err != nil {
@@ -87,33 +97,35 @@ func writeString(file *os.File, str string) {
 
 func localisedTitle(tr *i18n.TranslationSet, str string) string {
 	contextTitleMap := map[string]string{
-		"global":         tr.GlobalTitle,
-		"navigation":     tr.NavigationTitle,
-		"branches":       tr.BranchesTitle,
-		"localBranches":  tr.LocalBranchesTitle,
-		"files":          tr.FilesTitle,
-		"status":         tr.StatusTitle,
-		"submodules":     tr.SubmodulesTitle,
-		"subCommits":     tr.SubCommitsTitle,
-		"remoteBranches": tr.RemoteBranchesTitle,
-		"remotes":        tr.RemotesTitle,
-		"reflogCommits":  tr.ReflogCommitsTitle,
-		"tags":           tr.TagsTitle,
-		"commitFiles":    tr.CommitFilesTitle,
-		"commitMessage":  tr.CommitMessageTitle,
-		"commits":        tr.CommitsTitle,
-		"confirmation":   tr.ConfirmationTitle,
-		"information":    tr.InformationTitle,
-		"main":           tr.NormalTitle,
-		"patchBuilding":  tr.PatchBuildingTitle,
-		"mergeConflicts": tr.MergingTitle,
-		"staging":        tr.StagingTitle,
-		"menu":           tr.MenuTitle,
-		"search":         tr.SearchTitle,
-		"secondary":      tr.SecondaryTitle,
-		"stash":          tr.StashTitle,
-		"suggestions":    tr.SuggestionsCheatsheetTitle,
-		"extras":         tr.ExtrasTitle,
+		"global":            tr.GlobalTitle,
+		"navigation":        tr.NavigationTitle,
+		"branches":          tr.BranchesTitle,
+		"localBranches":     tr.LocalBranchesTitle,
+		"files":             tr.FilesTitle,
+		"status":            tr.StatusTitle,
+		"submodules":        tr.SubmodulesTitle,
+		"subCommits":        tr.SubCommitsTitle,
+		"remoteBranches":    tr.RemoteBranchesTitle,
+		"remotes":           tr.RemotesTitle,
+		"reflogCommits":     tr.ReflogCommitsTitle,
+		"tags":              tr.TagsTitle,
+		"commitFiles":       tr.CommitFilesTitle,
+		"commitMessage":     tr.CommitSummaryTitle,
+		"commitDescription": tr.CommitDescriptionTitle,
+		"commits":           tr.CommitsTitle,
+		"confirmation":      tr.ConfirmationTitle,
+		"information":       tr.InformationTitle,
+		"main":              tr.NormalTitle,
+		"patchBuilding":     tr.PatchBuildingTitle,
+		"mergeConflicts":    tr.MergingTitle,
+		"staging":           tr.StagingTitle,
+		"menu":              tr.MenuTitle,
+		"search":            tr.SearchTitle,
+		"secondary":         tr.SecondaryTitle,
+		"stash":             tr.StashTitle,
+		"suggestions":       tr.SuggestionsCheatsheetTitle,
+		"extras":            tr.ExtrasTitle,
+		"worktrees":         tr.WorktreesTitle,
 	}
 
 	title, ok := contextTitleMap[str]
@@ -126,12 +138,12 @@ func localisedTitle(tr *i18n.TranslationSet, str string) string {
 
 func getBindingSections(bindings []*types.Binding, tr *i18n.TranslationSet) []*bindingSection {
 	excludedViews := []string{"stagingSecondary", "patchBuildingSecondary"}
-	bindingsToDisplay := slices.Filter(bindings, func(binding *types.Binding) bool {
+	bindingsToDisplay := lo.Filter(bindings, func(binding *types.Binding, _ int) bool {
 		if lo.Contains(excludedViews, binding.ViewName) {
 			return false
 		}
 
-		return (binding.Description != "" || binding.Alternative != "")
+		return (binding.Description != "" || binding.Alternative != "") && binding.Key != nil
 	})
 
 	bindingsByHeader := lo.GroupBy(bindingsToDisplay, func(binding *types.Binding) header {
@@ -159,7 +171,7 @@ func getBindingSections(bindings []*types.Binding, tr *i18n.TranslationSet) []*b
 		return a.header.title < b.header.title
 	})
 
-	return slices.Map(bindingGroups, func(hb headerWithBindings) *bindingSection {
+	return lo.Map(bindingGroups, func(hb headerWithBindings, _ int) *bindingSection {
 		return &bindingSection{
 			title:    hb.header.title,
 			bindings: hb.bindings,
@@ -182,13 +194,15 @@ func getHeader(binding *types.Binding, tr *i18n.TranslationSet) header {
 func formatSections(tr *i18n.TranslationSet, bindingSections []*bindingSection) string {
 	content := fmt.Sprintf("# Lazygit %s\n", tr.Keybindings)
 
+	content += fmt.Sprintf("\n%s\n", italicize(tr.KeybindingsLegend))
+
 	for _, section := range bindingSections {
 		content += formatTitle(section.title)
-		content += "<pre>\n"
+		content += "| Key | Action | Info |\n"
+		content += "|-----|--------|-------------|\n"
 		for _, binding := range section.bindings {
 			content += formatBinding(binding)
 		}
-		content += "</pre>\n"
 	}
 
 	return content
@@ -199,13 +213,17 @@ func formatTitle(title string) string {
 }
 
 func formatBinding(binding *types.Binding) string {
+	action := keybindings.LabelFromKey(binding.Key)
+	description := binding.Description
 	if binding.Alternative != "" {
-		return fmt.Sprintf(
-			"  <kbd>%s</kbd>: %s (%s)\n",
-			keybindings.LabelFromKey(binding.Key),
-			binding.Description,
-			binding.Alternative,
-		)
+		action += fmt.Sprintf(" (%s)", binding.Alternative)
 	}
-	return fmt.Sprintf("  <kbd>%s</kbd>: %s\n", keybindings.LabelFromKey(binding.Key), binding.Description)
+
+	// Use backticks for keyboard keys. Two backticks are needed with an inner space
+	//  to escape a key that is itself a backtick.
+	return fmt.Sprintf("| `` %s `` | %s | %s |\n", action, description, binding.Tooltip)
+}
+
+func italicize(str string) string {
+	return fmt.Sprintf("_%s_", str)
 }

@@ -3,31 +3,38 @@ package controllers
 import (
 	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
+	"github.com/jesseduffield/lazygit/pkg/tasks"
 )
 
 // given we have no fields here, arguably we shouldn't even need this factory
 // struct, but we're maintaining consistency with the other files.
 type VerticalScrollControllerFactory struct {
-	controllerCommon *controllerCommon
+	c                    *ControllerCommon
+	viewBufferManagerMap *map[string]*tasks.ViewBufferManager
 }
 
-func NewVerticalScrollControllerFactory(c *controllerCommon) *VerticalScrollControllerFactory {
-	return &VerticalScrollControllerFactory{controllerCommon: c}
+func NewVerticalScrollControllerFactory(c *ControllerCommon, viewBufferManagerMap *map[string]*tasks.ViewBufferManager) *VerticalScrollControllerFactory {
+	return &VerticalScrollControllerFactory{
+		c:                    c,
+		viewBufferManagerMap: viewBufferManagerMap,
+	}
 }
 
 func (self *VerticalScrollControllerFactory) Create(context types.Context) types.IController {
 	return &VerticalScrollController{
-		baseController:   baseController{},
-		controllerCommon: self.controllerCommon,
-		context:          context,
+		baseController:       baseController{},
+		c:                    self.c,
+		context:              context,
+		viewBufferManagerMap: self.viewBufferManagerMap,
 	}
 }
 
 type VerticalScrollController struct {
 	baseController
-	*controllerCommon
+	c *ControllerCommon
 
-	context types.Context
+	context              types.Context
+	viewBufferManagerMap *map[string]*tasks.ViewBufferManager
 }
 
 func (self *VerticalScrollController) Context() types.Context {
@@ -58,13 +65,18 @@ func (self *VerticalScrollController) GetMouseKeybindings(opts types.Keybindings
 }
 
 func (self *VerticalScrollController) HandleScrollUp() error {
-	self.context.GetViewTrait().ScrollUp(self.c.UserConfig.Gui.ScrollHeight)
+	self.context.GetViewTrait().ScrollUp(self.c.UserConfig().Gui.ScrollHeight)
 
 	return nil
 }
 
 func (self *VerticalScrollController) HandleScrollDown() error {
-	self.context.GetViewTrait().ScrollDown(self.c.UserConfig.Gui.ScrollHeight)
+	scrollHeight := self.c.UserConfig().Gui.ScrollHeight
+	self.context.GetViewTrait().ScrollDown(scrollHeight)
+
+	if manager, ok := (*self.viewBufferManagerMap)[self.context.GetViewName()]; ok {
+		manager.ReadLines(scrollHeight)
+	}
 
 	return nil
 }

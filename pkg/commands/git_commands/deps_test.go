@@ -1,25 +1,31 @@
 package git_commands
 
 import (
+	"os"
+
 	"github.com/go-errors/errors"
 	gogit "github.com/jesseduffield/go-git/v5"
 	"github.com/jesseduffield/lazygit/pkg/commands/git_config"
-	"github.com/jesseduffield/lazygit/pkg/commands/loaders"
 	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
+	"github.com/jesseduffield/lazygit/pkg/commands/patch"
 	"github.com/jesseduffield/lazygit/pkg/common"
 	"github.com/jesseduffield/lazygit/pkg/config"
 	"github.com/jesseduffield/lazygit/pkg/utils"
+	"github.com/spf13/afero"
 )
 
 type commonDeps struct {
 	runner     *oscommands.FakeCmdObjRunner
 	userConfig *config.UserConfig
+	appState   *config.AppState
+	gitVersion *GitVersion
 	gitConfig  *git_config.FakeGitConfig
 	getenv     func(string) string
 	removeFile func(string) error
-	dotGitDir  string
 	common     *common.Common
 	cmd        *oscommands.CmdObjBuilder
+	fs         afero.Fs
+	repoPaths  *RepoPaths
 }
 
 func buildGitCommon(deps commonDeps) *GitCommon {
@@ -27,7 +33,17 @@ func buildGitCommon(deps commonDeps) *GitCommon {
 
 	gitCommon.Common = deps.common
 	if gitCommon.Common == nil {
-		gitCommon.Common = utils.NewDummyCommonWithUserConfig(deps.userConfig)
+		gitCommon.Common = utils.NewDummyCommonWithUserConfigAndAppState(deps.userConfig, deps.appState)
+	}
+
+	if deps.fs != nil {
+		gitCommon.Fs = deps.fs
+	}
+
+	if deps.repoPaths != nil {
+		gitCommon.repoPaths = deps.repoPaths
+	} else {
+		gitCommon.repoPaths = MockRepoPaths(".git")
 	}
 
 	runner := deps.runner
@@ -42,9 +58,14 @@ func buildGitCommon(deps commonDeps) *GitCommon {
 	}
 	gitCommon.cmd = cmd
 
-	gitCommon.Common.UserConfig = deps.userConfig
-	if gitCommon.Common.UserConfig == nil {
-		gitCommon.Common.UserConfig = config.GetDefaultConfig()
+	gitCommon.Common.SetUserConfig(deps.userConfig)
+	if gitCommon.Common.UserConfig() == nil {
+		gitCommon.Common.SetUserConfig(config.GetDefaultConfig())
+	}
+
+	gitCommon.version = deps.gitVersion
+	if gitCommon.version == nil {
+		gitCommon.version = &GitVersion{2, 0, 0, ""}
 	}
 
 	gitConfig := deps.gitConfig
@@ -70,12 +91,8 @@ func buildGitCommon(deps commonDeps) *GitCommon {
 		GetenvFn:     getenv,
 		Cmd:          cmd,
 		RemoveFileFn: removeFile,
+		TempDir:      os.TempDir(),
 	})
-
-	gitCommon.dotGitDir = deps.dotGitDir
-	if gitCommon.dotGitDir == "" {
-		gitCommon.dotGitDir = ".git"
-	}
 
 	return gitCommon
 }
@@ -86,8 +103,8 @@ func buildRepo() *gogit.Repository {
 	return repo
 }
 
-func buildFileLoader(gitCommon *GitCommon) *loaders.FileLoader {
-	return loaders.NewFileLoader(gitCommon.Common, gitCommon.cmd, gitCommon.config)
+func buildFileLoader(gitCommon *GitCommon) *FileLoader {
+	return NewFileLoader(gitCommon, gitCommon.cmd, gitCommon.config)
 }
 
 func buildSubmoduleCommands(deps commonDeps) *SubmoduleCommands {
@@ -107,6 +124,26 @@ func buildWorkingTreeCommands(deps commonDeps) *WorkingTreeCommands {
 	fileLoader := buildFileLoader(gitCommon)
 
 	return NewWorkingTreeCommands(gitCommon, submoduleCommands, fileLoader)
+}
+
+func buildPatchCommands(deps commonDeps) *PatchCommands { //nolint:golint,unused
+	gitCommon := buildGitCommon(deps)
+	rebaseCommands := buildRebaseCommands(deps)
+	commitCommands := buildCommitCommands(deps)
+	statusCommands := buildStatusCommands(deps)
+	stashCommands := buildStashCommands(deps)
+	loadFileFn := func(from string, to string, reverse bool, filename string, plain bool) (string, error) {
+		return "", nil
+	}
+	patchBuilder := patch.NewPatchBuilder(gitCommon.Log, loadFileFn)
+
+	return NewPatchCommands(gitCommon, rebaseCommands, commitCommands, statusCommands, stashCommands, patchBuilder)
+}
+
+func buildStatusCommands(deps commonDeps) *StatusCommands { //nolint:golint,unused
+	gitCommon := buildGitCommon(deps)
+
+	return NewStatusCommands(gitCommon)
 }
 
 func buildStashCommands(deps commonDeps) *StashCommands {
@@ -141,4 +178,10 @@ func buildBranchCommands(deps commonDeps) *BranchCommands {
 	gitCommon := buildGitCommon(deps)
 
 	return NewBranchCommands(gitCommon)
+}
+
+func buildFlowCommands(deps commonDeps) *FlowCommands {
+	gitCommon := buildGitCommon(deps)
+
+	return NewFlowCommands(gitCommon)
 }

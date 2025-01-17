@@ -10,6 +10,19 @@ before making a change.
 
 [This video](https://www.youtube.com/watch?v=kNavnhzZHtk) walks through the process of adding a small feature to lazygit. If you have no idea where to start, watching that video is a good first step.
 
+## Design principles
+
+See [here](./VISION.md) for a set of design principles that we want to consider when building a feature or making a change.
+
+## Codebase guide
+
+[This doc](./docs/dev/Codebase_Guide.md) explains:
+* what the different packages in the codebase are for
+* where important files live
+* important concepts in the code
+* how the event loop works
+* other useful information
+
 ## All code changes happen through Pull Requests
 
 Pull requests are the best way to propose changes to the codebase. We actively
@@ -21,7 +34,31 @@ welcome your pull requests:
 4. Write a [good commit message](http://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html).
 5. Issue that pull request!
 
+Please do not raise pull request from your fork's master branch: make a feature branch instead. Lazygit maintainers will sometimes push changes to your branch when reviewing a PR and we often can't do this if you use your master branch.
+
 If you've never written Go in your life, then join the club! Lazygit was the maintainer's first Go program, and most contributors have never used Go before. Go is widely considered an easy-to-learn language, so if you're looking for an open source project to gain dev experience, you've come to the right place.
+
+## Running in a VSCode dev container
+
+If you want to spare yourself the hassle of setting up your dev environment yourself (i.e. installing Go, extensions, and extra tools), you can run the Lazygit code in a VSCode dev container like so:
+
+![image](https://user-images.githubusercontent.com/8456633/201500508-0d55f99f-5035-4a6f-a0f8-eaea5c003e5d.png)
+
+This requires that:
+* you have docker installed
+* you have the dev containers extension installed in VSCode
+
+See [here](https://code.visualstudio.com/docs/devcontainers/containers) for more info about dev containers.
+
+## Running in a Github Codespace
+
+If you want to start contributing to Lazygit with the click of a button, you can open the lazygit codebase in a Codespace. First fork the repo, then click to create a codespace:
+
+![image](https://user-images.githubusercontent.com/8456633/201500566-ffe9105d-6030-4cc7-a525-6570b0b413a2.png)
+
+To run lazygit from within the integrated terminal just go `go run main.go`
+
+This allows you to contribute to Lazygit without needing to install anything on your local machine. The Codespace has all the necessary tools and extensions pre-installed.
 
 ## Code of conduct
 
@@ -75,38 +112,25 @@ To run gofumpt from your terminal go:
 go install mvdan.cc/gofumpt@latest && gofumpt -l -w .
 ```
 
+## Programming Font
+
+Lazygit supports [Nerd Fonts](https://www.nerdfonts.com) to render certain icons. Sometimes we use some of these icons verbatim in string literals in the code (mainly in tests), so you need to set your development environment to use a nerd font to see these.
+
 ## Internationalisation
 
-Boy that's a hard word to spell. Anyway, lazygit is translated into several languages within the pkg/i18n package. If you need to render text to the user, you should add a new field to the TranslationSet struct in `pkg/i18n/english.go` and add the actual content within the `EnglishTranslationSet()` method in the same file. Then you can access via `gui.Tr.YourNewText` (or `app.Tr.YourNewText`, etc). Although it is appreciated if you translate the text into other languages, it's not expected of you (google translate will likely do a bad job anyway!).
+Boy that's a hard word to spell. Anyway, lazygit is translated into several languages within the pkg/i18n package. If you need to render text to the user, you should add a new field to the TranslationSet struct in `pkg/i18n/english.go` and add the actual content within the `EnglishTranslationSet()` method in the same file. Then you can access via `gui.Tr.YourNewText` (or `self.c.Tr.YourNewText`, etc). Although it is appreciated if you translate the text into other languages, it's not expected of you (google translate will likely do a bad job anyway!).
+
+Note, we use 'Sentence case' for everything (so no 'Title Case' or 'whatever-it's-called-when-there's-no-capital-letters-case')
 
 ## Debugging
 
 The easiest way to debug lazygit is to have two terminal tabs open at once: one for running lazygit (via `go run main.go -debug` in the project root) and one for viewing lazygit's logs (which can be done via `go run main.go --logs` or just `lazygit --logs`).
 
-From most places in the codebase you have access to a logger e.g. `gui.Log.Warn("blah")`.
+From most places in the codebase you have access to a logger e.g. `gui.Log.Warn("blah")` or `self.c.Log.Warn("blah")`.
 
 If you find that the existing logs are too noisy, you can set the log level with e.g. `LOG_LEVEL=warn go run main.go -debug` and then only use `Warn` logs yourself.
 
-If you need to log from code in the vendor directory (e.g. the `gocui` package), you won't have access to the logger, but you can easily add logging support by adding the following:
-
-```go
-func newLogger() *logrus.Entry {
-	// REPLACE THE BELOW PATH WITH YOUR ACTUAL LOG PATH (YOU'LL SEE THIS PRINTED WHEN YOU RUN `lazygit --logs`
-	logPath := "/Users/jesseduffield/Library/Application Support/jesseduffield/lazygit/development.log"
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		panic("unable to log to file")
-	}
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-	logger.SetOutput(file)
-	return logger.WithFields(logrus.Fields{})
-}
-
-var Log = newLogger()
-...
-Log.Warn("blah")
-```
+If you need to log from code in the vendor directory (e.g. the `gocui` package), you won't have access to the logger, but you can easily add logging support by setting the `LAZYGIT_LOG_PATH` environment variable and using `logs.Global.Warn("blah")`. This is a global logger that's only intended for development purposes.
 
 If you keep having to do some setup steps to reproduce an issue, read the Testing section below to see how to create an integration test by recording a lazygit session. It's pretty easy!
 
@@ -134,31 +158,7 @@ If you want to trigger a debug session from VSCode, you can use the following sn
 
 ## Profiling
 
-If you want to investigate what's contributing to CPU usage you can add the following to the top of the `main()` function in `main.go`
-
-```go
-import "runtime/pprof"
-
-func main() {
-	f, err := os.Create("cpu.prof")
-	if err != nil {
-		log.Fatal("could not create CPU profile: ", err)
-	}
-	defer f.Close()
-	if err := pprof.StartCPUProfile(f); err != nil {
-		log.Fatal("could not start CPU profile: ", err)
-	}
-	defer pprof.StopCPUProfile()
-	...
-```
-
-Then run lazygit, and afterwards, from your terminal, run:
-
-```sh
-go tool pprof --web cpu.prof
-```
-
-That should open an application which allows you to view the breakdown of CPU usage.
+If you want to investigate what's contributing to CPU or memory usage, see [this separate document](docs/dev/Profiling.md).
 
 ## Testing
 
@@ -191,6 +191,8 @@ Sometimes you will need to make a change in the gocui fork (https://github.com/j
 ```sh
 ./scripts/bump_lazycore.sh
 ```
+
+Or if you're using VSCode, there is a bump lazycore task you can find by going `cmd+shift+p` and typing 'Run task'
 
 5. Raise a PR in lazygit with those changes
 

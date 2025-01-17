@@ -1,3 +1,5 @@
+//go:generate go run test_list_generator.go
+
 package tests
 
 import (
@@ -7,63 +9,37 @@ import (
 	"strings"
 
 	"github.com/jesseduffield/generics/set"
-	"github.com/jesseduffield/generics/slices"
-	"github.com/jesseduffield/lazycore/pkg/utils"
 	"github.com/jesseduffield/lazygit/pkg/integration/components"
-	"github.com/jesseduffield/lazygit/pkg/integration/tests/bisect"
-	"github.com/jesseduffield/lazygit/pkg/integration/tests/branch"
-	"github.com/jesseduffield/lazygit/pkg/integration/tests/cherry_pick"
-	"github.com/jesseduffield/lazygit/pkg/integration/tests/commit"
-	"github.com/jesseduffield/lazygit/pkg/integration/tests/custom_commands"
-	"github.com/jesseduffield/lazygit/pkg/integration/tests/interactive_rebase"
-	"github.com/jesseduffield/lazygit/pkg/integration/tests/stash"
+	"github.com/samber/lo"
 )
 
-// Here is where we lists the actual tests that will run. When you create a new test,
-// be sure to add it to this list.
-
-var tests = []*components.IntegrationTest{
-	commit.Commit,
-	commit.NewBranch,
-	branch.Suggestions,
-	branch.Delete,
-	branch.Rebase,
-	branch.RebaseAndDrop,
-	interactive_rebase.One,
-	interactive_rebase.AmendMerge,
-	custom_commands.Basic,
-	custom_commands.MultiplePrompts,
-	custom_commands.MenuFromCommand,
-	bisect.Basic,
-	bisect.FromOtherBranch,
-	cherry_pick.CherryPick,
-	cherry_pick.CherryPickConflicts,
-	custom_commands.FormPrompts,
-	stash.Rename,
-}
-
-func GetTests() []*components.IntegrationTest {
+func GetTests(lazygitRootDir string) []*components.IntegrationTest {
 	// first we ensure that each test in this directory has actually been added to the above list.
 	testCount := 0
 
-	testNamesSet := set.NewFromSlice(slices.Map(
+	testNamesSet := set.NewFromSlice(lo.Map(
 		tests,
-		func(test *components.IntegrationTest) string {
+		func(test *components.IntegrationTest, _ int) string {
 			return test.Name()
 		},
 	))
 
 	missingTestNames := []string{}
 
-	if err := filepath.Walk(filepath.Join(utils.GetLazyRootDirectory(), "pkg/integration/tests"), func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(filepath.Join(lazygitRootDir, "pkg/integration/tests"), func(path string, info os.FileInfo, err error) error {
 		if !info.IsDir() && strings.HasSuffix(path, ".go") {
-			// ignoring this current file
-			if filepath.Base(path) == "tests.go" {
+			// ignoring non-test files
+			if filepath.Base(path) == "tests.go" || filepath.Base(path) == "test_list.go" || filepath.Base(path) == "test_list_generator.go" {
 				return nil
 			}
 
 			// the shared directory won't itself contain tests: only shared helper functions
 			if filepath.Base(filepath.Dir(path)) == "shared" {
+				return nil
+			}
+
+			// any file named shared.go will also be ignored, because those files are only used for shared helper functions
+			if filepath.Base(path) == "shared.go" {
 				return nil
 			}
 
@@ -79,13 +55,13 @@ func GetTests() []*components.IntegrationTest {
 	}
 
 	if len(missingTestNames) > 0 {
-		panic(fmt.Sprintf("The following tests are missing from the list of tests: %s. You need to add them to `pkg/integration/tests/tests.go`.", strings.Join(missingTestNames, ", ")))
+		panic(fmt.Sprintf("The following tests are missing from the list of tests: %s. You need to add them to `pkg/integration/tests/test_list.go`. Use `go generate ./...` to regenerate the tests list.", strings.Join(missingTestNames, ", ")))
 	}
 
 	if testCount > len(tests) {
-		panic("you have not added all of the tests to the tests list in `pkg/integration/tests/tests.go`")
+		panic("you have not added all of the tests to the tests list in `pkg/integration/tests/test_list.go`. Use `go generate ./...` to regenerate the tests list.")
 	} else if testCount < len(tests) {
-		panic("There are more tests in `pkg/integration/tests/tests.go` than there are test files in the tests directory. Ensure that you only have one test per file and you haven't included the same test twice in the tests list.")
+		panic("There are more tests in `pkg/integration/tests/test_list.go` than there are test files in the tests directory. Ensure that you only have one test per file and you haven't included the same test twice in the tests list. Use `go generate ./...` to regenerate the tests list.")
 	}
 
 	return tests

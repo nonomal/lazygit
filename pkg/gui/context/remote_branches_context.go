@@ -1,62 +1,57 @@
 package context
 
 import (
-	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
+	"github.com/jesseduffield/lazygit/pkg/gui/presentation"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
+	"github.com/samber/lo"
 )
 
 type RemoteBranchesContext struct {
-	*BasicViewModel[*models.RemoteBranch]
+	*FilteredListViewModel[*models.RemoteBranch]
 	*ListContextTrait
 	*DynamicTitleBuilder
 }
 
-var _ types.IListContext = (*RemoteBranchesContext)(nil)
+var (
+	_ types.IListContext    = (*RemoteBranchesContext)(nil)
+	_ types.DiffableContext = (*RemoteBranchesContext)(nil)
+)
 
 func NewRemoteBranchesContext(
-	getModel func() []*models.RemoteBranch,
-	view *gocui.View,
-	getDisplayStrings func(startIdx int, length int) [][]string,
-
-	onFocus func(types.OnFocusOpts) error,
-	onRenderToMain func() error,
-	onFocusLost func(opts types.OnFocusLostOpts) error,
-
-	c *types.HelperCommon,
+	c *ContextCommon,
 ) *RemoteBranchesContext {
-	viewModel := NewBasicViewModel(getModel)
+	viewModel := NewFilteredListViewModel(
+		func() []*models.RemoteBranch { return c.Model().RemoteBranches },
+		func(remoteBranch *models.RemoteBranch) []string {
+			return []string{remoteBranch.Name}
+		},
+	)
+
+	getDisplayStrings := func(_ int, _ int) [][]string {
+		return presentation.GetRemoteBranchListDisplayStrings(viewModel.GetItems(), c.Modes().Diffing.Ref)
+	}
 
 	return &RemoteBranchesContext{
-		BasicViewModel:      viewModel,
-		DynamicTitleBuilder: NewDynamicTitleBuilder(c.Tr.RemoteBranchesDynamicTitle),
+		FilteredListViewModel: viewModel,
+		DynamicTitleBuilder:   NewDynamicTitleBuilder(c.Tr.RemoteBranchesDynamicTitle),
 		ListContextTrait: &ListContextTrait{
 			Context: NewSimpleContext(NewBaseContext(NewBaseContextOpts{
-				View:       view,
-				WindowName: "branches",
-				Key:        REMOTE_BRANCHES_CONTEXT_KEY,
-				Kind:       types.SIDE_CONTEXT,
-				Focusable:  true,
-				Transient:  true,
-			}), ContextCallbackOpts{
-				OnFocus:        onFocus,
-				OnFocusLost:    onFocusLost,
-				OnRenderToMain: onRenderToMain,
-			}),
-			list:              viewModel,
-			getDisplayStrings: getDisplayStrings,
-			c:                 c,
+				View:                        c.Views().RemoteBranches,
+				WindowName:                  "branches",
+				Key:                         REMOTE_BRANCHES_CONTEXT_KEY,
+				Kind:                        types.SIDE_CONTEXT,
+				Focusable:                   true,
+				Transient:                   true,
+				NeedsRerenderOnHeightChange: true,
+			})),
+			ListRenderer: ListRenderer{
+				list:              viewModel,
+				getDisplayStrings: getDisplayStrings,
+			},
+			c: c,
 		},
 	}
-}
-
-func (self *RemoteBranchesContext) GetSelectedItemId() string {
-	item := self.GetSelected()
-	if item == nil {
-		return ""
-	}
-
-	return item.ID()
 }
 
 func (self *RemoteBranchesContext) GetSelectedRef() types.Ref {
@@ -65,4 +60,28 @@ func (self *RemoteBranchesContext) GetSelectedRef() types.Ref {
 		return nil
 	}
 	return remoteBranch
+}
+
+func (self *RemoteBranchesContext) GetSelectedRefs() ([]types.Ref, int, int) {
+	items, startIdx, endIdx := self.GetSelectedItems()
+
+	refs := lo.Map(items, func(item *models.RemoteBranch, _ int) types.Ref {
+		return item
+	})
+
+	return refs, startIdx, endIdx
+}
+
+func (self *RemoteBranchesContext) GetDiffTerminals() []string {
+	itemId := self.GetSelectedItemId()
+
+	return []string{itemId}
+}
+
+func (self *RemoteBranchesContext) RefForAdjustingLineNumberInDiff() string {
+	return self.GetSelectedItemId()
+}
+
+func (self *RemoteBranchesContext) ShowBranchHeadsInSubCommits() bool {
+	return true
 }

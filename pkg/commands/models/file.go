@@ -18,8 +18,12 @@ type File struct {
 	HasMergeConflicts       bool
 	HasInlineMergeConflicts bool
 	DisplayString           string
-	Type                    string // one of 'file', 'directory', and 'other'
 	ShortStatus             string // e.g. 'AD', ' A', 'M ', '??'
+	LinesDeleted            int
+	LinesAdded              int
+
+	// If true, this must be a worktree folder
+	IsWorktree bool
 }
 
 // sometimes we need to deal with either a node (which contains a file) or an actual file
@@ -29,6 +33,7 @@ type IFile interface {
 	GetIsTracked() bool
 	GetPath() string
 	GetPreviousPath() string
+	GetIsFile() bool
 }
 
 func (f *File) IsRename() bool {
@@ -90,6 +95,10 @@ func (f *File) GetPath() string {
 
 func (f *File) GetPreviousPath() string {
 	return f.PreviousName
+}
+
+func (f *File) GetIsFile() bool {
+	return true
 }
 
 type StatusFields struct {

@@ -16,34 +16,25 @@ go run cmd/integration_test/main.go cli [--slow or --sandbox] [testname or testp
 
 ## Writing tests
 
-The tests live in pkg/integration/tests. Each test has two important steps: the setup step and the run step.
+The tests live in pkg/integration/tests. Each test is registered in `pkg/integration/tests/test_list.go` which is an auto-generated file. You can re-generate that file by running `go generate ./...` at the root of the Lazygit repo.
+
+Each test has two important steps: the setup step and the run step.
 
 ### Setup step
 
 In the setup step, we prepare a repo with shell commands, for example, creating a merge conflict that will need to be resolved upon opening lazygit. This is all done via the `shell` argument.
 
+When the test runs, lazygit will open in the same working directory that the shell ends up in (so if you want to start lazygit somewhere other than the default location, you can use `shell.Chdir()` at the end of the setup step to set that working directory.
+
 ### Run step
 
-The run step has four arguments passed in:
+The run step has two arguments passed in:
 
-1. `shell`
-2. `input`
-3. `assert`
-4. `keys`
+1. `t` (the test driver)
+2. `keys`
 
-`shell` we've already seen in the setup step. The reason it's passed into the run step is that we may want to emulate background events. For example, the user modifying a file outside of lazygit.
-
-`input` is for driving the gui by pressing certain keys, selecting list items, etc.
-
-`assert` is for asserting on the state of the lazygit session. When you call a method on `assert`, the assert struct will wait for the assertion to hold true and then continue (failing the test after a timeout). For this reason, assertions have two purposes: one is to ensure the test fails as soon as something unexpected happens, but another is to allow lazygit to process a keypress before you follow up with more keypresses. If you input a bunch of keypresses too quickly lazygit might get confused.
-
-### Tips
-
-Try to do as much setup work as possible in your setup step. For example, if all you're testing is that the user is able to resolve merge conflicts, create the merge conflicts in the setup step. On the other hand, if you're testing to see that lazygit can warn the user about merge conflicts after an attempted merge, it's fine to wait until the run step to actually create the conflicts. If the run step is focused on the thing you're trying to test, the test will run faster and its intent will be clearer.
-
-Use assertions to ensure that lazygit has processed all your keybindings so far. For example, if you press 'n' on a branch to create a new branch, assert that the confirmation view is now focused.
-
-If you find yourself doing something frequently in a test, consider making it a method in one of the helper arguments. For example, instead of calling `input.PressKey(keys.Universal.Confirm)` in 100 places, it's better to have a method `input.Confirm()`. This is not to say that everything should be made into a method on the input struct: just things that are particularly common in tests.
+`t` is for driving the gui by pressing certain keys, selecting list items, etc.
+`keys` is for use when getting the test to press a particular key e.g. `t.Views().Commits().Focus().PressKey(keys.Universal.Confirm)`
 
 ## Running tests
 
@@ -51,7 +42,7 @@ There are three ways to invoke a test:
 
 1. go run cmd/integration_test/main.go cli [--slow or --sandbox] [testname or testpath...]
 2. go run cmd/integration_test/main.go tui
-3. go test pkg/integration/clients/go_test.go
+3. go test pkg/integration/clients/*.go
 
 The first, the test runner, is for directly running a test from the command line. If you pass no arguments, it runs all tests.
 The second, the TUI, is for running tests from a terminal UI where it's easier to find a test and run it without having to copy it's name and paste it into the terminal. This is the easiest approach by far.
@@ -59,30 +50,55 @@ The third, the go-test command, intended only for use in CI, to be run along wit
 
 The name of a test is based on its path, so the name of the test at `pkg/integration/tests/commit/new_branch.go` is commit/new_branch. So to run it with our test runner you would run `go run cmd/integration_test/main.go cli commit/new_branch`.
 
-You can pass the KEY_PRESS_DELAY env var to the test runner in order to set a delay in milliseconds between keypresses, which helps for watching a test at a realistic speed to understand what it's doing. Or you can pass the '--slow' flag which sets a pre-set 'slow' key delay. In the tui you can press 't' to run the test in slow mode.
+You can pass the INPUT_DELAY env var to the test runner in order to set a delay in milliseconds between keypresses or mouse clicks, which helps for watching a test at a realistic speed to understand what it's doing. Or you can pass the '--slow' flag which sets a pre-set 'slow' key delay. In the tui you can press 't' to run the test in slow mode.
 
-### Snapshots
+The resultant repo will be stored in `test/_results`, so if you're not sure what went wrong you can go there and inspect the repo.
 
-At the moment (this is subject to change) each test has a snapshot repo created after running for the first time. These snapshots live in `test/integration_new`, in folders named 'expected' (alongside the 'actual' folders which contain the resulting repo from the last test run). Whenever you run a test, the resultant repo will be compared against the snapshot repo and if they're different, you'll be asked whether you want to update the snapshot. If you want to update a snapshot without being prompted you can pass MODE=update to the test runner.
+### Running tests in VSCode
+
+If you've opened an integration test file in your editor you can run that file by bringing up the command panel with `cmd+shift+p` and typing 'run task', then selecting the test task you want to run
+
+![image](https://user-images.githubusercontent.com/8456633/201500427-b86e129f-5f35-4d55-b7bd-fff5d8e4a04e.png)
+![image](https://user-images.githubusercontent.com/8456633/201500431-903deb8c-c210-4054-8514-ab7088c7a839.png)
+The test will run in a VSCode terminal:
+![image](https://user-images.githubusercontent.com/8456633/201500446-b87abf11-9653-438f-8a9a-e0bf8abdb7ee.png)
+
+### Debugging tests
+
+Debugging an integration test is possible in two ways:
+
+1. Use the -debug option of the integration test runner's "cli" command, e.g. `go run cmd/integration_test/main.go cli -debug tag/reset.go`
+2. Select a test in the "tui" runner and hit "d" to debug it.
+
+In both cases the test runner will print to the console that it is waiting for a debugger to attach, so now you need to tell your debugger to attach to a running process with the name "test_lazygit". If you are using Visual Studio Code, an easy way to do that is to use the "Attach to integration test runner" debug configuration. The test runner will resume automatically when it detects that a debugger was attached. Don't forget to set a breakpoint in the code that you want to step through, otherwise the test will just finish (i.e. it doesn't stop in the debugger automatically).
 
 ### Sandbox mode
 
 Say you want to do a manual test of how lazygit handles merge-conflicts, but you can't be bothered actually finding a way to create merge conflicts in a repo. To make your life easier, you can simply run a merge-conflicts test in sandbox mode, meaning the setup step is run for you, and then instead of the test driving the lazygit session, you're allowed to drive it yourself.
 
-To run a test in sandbox mode you can press 's' on a test in the test TUI or in the test runner pass MODE=sandbox or the --sandbox argument.
+To run a test in sandbox mode you can press 's' on a test in the test TUI or in the test runner pass the --sandbox argument.
 
-## Migration process
+## Tips for writing tests
 
-At the time of writing, most tests are created under an old approach, where you would record yourself in a lazygit session and then the test would replay the keybindings with the same timestamps. This old approach is great for writing tests quickly, but is much harder to maintain. It has to rely entirely on snapshots to determining if a test passes or fails, and can't do assertions along the way. It's also harder to grok what's the intention behind certain actions that take place within the test (e.g. was the recorder intentionally switching to another panel or was that just a misclick?).
+### Handle most setup in the `shell` part of the test
 
-At the moment, all the deprecated test code lives in pkg/integration/deprecated. Hopefully in the very near future we migrate everything across so that we don't need to maintain two systems.
+Try to do as much setup work as possible in your setup step. For example, if all you're testing is that the user is able to resolve merge conflicts, create the merge conflicts in the setup step. On the other hand, if you're testing to see that lazygit can warn the user about merge conflicts after an attempted merge, it's fine to wait until the run step to actually create the conflicts. If the run step is focused on the thing you're trying to test, the test will run faster and its intent will be clearer.
 
-We should never write any new tests under the old method, and if a given test breaks because of new functionality, it's best to simply rewrite it under the new approach. If you want to run a test for the sake of watching what it does so that you can transcribe it into the new approach, you can run:
+### Create helper functions for (very) frequently used test logic
 
+If within a test directory you find several tests need to share some logic, you can create a file called `shared.go` in that directory to hold shared helper functions (see `pkg/integration/tests/filter_by_path/shared.go` for an example).
+
+If you need to share test logic across test directories you can put helper functions in the `tests/shared` package. If you find yourself frequently doing the same thing from within a test across test directories, for example, responding a particular popup, consider adding a helper method to `pkg/integration/components/common.go`. If you look around the code in the `components` directory you may find another place that's sensible to put your helper function.
+
+### Don't do too much in one test
+
+If you're testing different pieces of functionality, it's better to test them in isolation using multiple short tests, compared to one larger longer test. Sometimes it's appropriate to have a longer test which tests how various different pieces interact, but err on the side of keeping things short.
+
+## Testing against old git versions
+
+Our CI tests against multiple git versions. If your test fails on an old version, then to troubleshoot you'll need to install the failing git version. One option is to use [rtx](https://github.com/jdxcode/rtx) (see installation steps in the readme) with the git plugin like so:
+```sh
+rtx plugin add git
+rtx install git 2.20.0
+rtx local git 2.20.0
 ```
-go run pkg/integration/deprecated/cmd/tui/main.go
-```
-
-The tests in the old format live in test/integration. In the old format, test definitions are co-located with the snapshots. The setup step is done in a `setup.sh` shell script and the `recording.json` file contains the recorded keypresses to be replayed during the test.
-
-If you have rewritten an integration test under the new pattern, be sure to delete the old integration test directory.

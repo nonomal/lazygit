@@ -34,6 +34,16 @@ func (self *Resolver) resolvePrompt(
 		return nil, err
 	}
 
+	result.Suggestions.Preset, err = resolveTemplate(prompt.Suggestions.Preset)
+	if err != nil {
+		return nil, err
+	}
+
+	result.Suggestions.Command, err = resolveTemplate(prompt.Suggestions.Command)
+	if err != nil {
+		return nil, err
+	}
+
 	result.Body, err = resolveTemplate(prompt.Body)
 	if err != nil {
 		return nil, err
@@ -62,7 +72,6 @@ func (self *Resolver) resolvePrompt(
 func (self *Resolver) resolveMenuOptions(prompt *config.CustomCommandPrompt, resolveTemplate func(string) (string, error)) ([]config.CustomCommandMenuOption, error) {
 	newOptions := make([]config.CustomCommandMenuOption, 0, len(prompt.Options))
 	for _, option := range prompt.Options {
-		option := option
 		newOption, err := self.resolveMenuOption(&option, resolveTemplate)
 		if err != nil {
 			return nil, err

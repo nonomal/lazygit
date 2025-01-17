@@ -7,26 +7,55 @@ import (
 
 var Commit = NewIntegrationTest(NewIntegrationTestArgs{
 	Description:  "Staging a couple files and committing",
-	ExtraCmdArgs: "",
+	ExtraCmdArgs: []string{},
 	Skip:         false,
 	SetupConfig:  func(config *config.AppConfig) {},
 	SetupRepo: func(shell *Shell) {
 		shell.CreateFile("myfile", "myfile content")
 		shell.CreateFile("myfile2", "myfile2 content")
 	},
-	Run: func(shell *Shell, input *Input, assert *Assert, keys config.KeybindingConfig) {
-		assert.CommitCount(0)
+	Run: func(t *TestDriver, keys config.KeybindingConfig) {
+		t.Views().Commits().
+			IsEmpty()
 
-		input.PrimaryAction()
-		input.NextItem()
-		input.PrimaryAction()
-		input.PressKeys(keys.Files.CommitChanges)
+		t.Views().Files().
+			IsFocused().
+			Lines(
+				Contains("?? myfile").IsSelected(),
+				Contains("?? myfile2"),
+			).
+			PressPrimaryAction(). // stage file
+			Lines(
+				Contains("A  myfile").IsSelected(),
+				Contains("?? myfile2"),
+			).
+			SelectNextItem().
+			PressPrimaryAction(). // stage other file
+			Lines(
+				Contains("A  myfile"),
+				Contains("A  myfile2").IsSelected(),
+			).
+			Press(keys.Files.CommitChanges)
 
 		commitMessage := "my commit message"
-		input.Type(commitMessage)
-		input.Confirm()
 
-		assert.CommitCount(1)
-		assert.MatchHeadCommitMessage(Equals(commitMessage))
+		t.ExpectPopup().CommitMessagePanel().Type(commitMessage).Confirm()
+
+		t.Views().Files().
+			IsEmpty()
+
+		t.Views().Commits().
+			Focus().
+			Lines(
+				Contains(commitMessage).IsSelected(),
+			).
+			PressEnter()
+
+		t.Views().CommitFiles().
+			IsFocused().
+			Lines(
+				Contains("A myfile"),
+				Contains("A myfile2"),
+			)
 	},
 })

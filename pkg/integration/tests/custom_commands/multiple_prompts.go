@@ -7,13 +7,13 @@ import (
 
 var MultiplePrompts = NewIntegrationTest(NewIntegrationTestArgs{
 	Description:  "Using a custom command with multiple prompts",
-	ExtraCmdArgs: "",
+	ExtraCmdArgs: []string{},
 	Skip:         false,
 	SetupRepo: func(shell *Shell) {
 		shell.EmptyCommit("blah")
 	},
 	SetupConfig: func(cfg *config.AppConfig) {
-		cfg.UserConfig.CustomCommands = []config.CustomCommand{
+		cfg.GetUserConfig().CustomCommands = []config.CustomCommand{
 			{
 				Key:     "a",
 				Context: "files",
@@ -53,34 +53,27 @@ var MultiplePrompts = NewIntegrationTest(NewIntegrationTestArgs{
 			},
 		}
 	},
-	Run: func(
-		shell *Shell,
-		input *Input,
-		assert *Assert,
-		keys config.KeybindingConfig,
-	) {
-		assert.WorkingTreeFileCount(0)
+	Run: func(t *TestDriver, keys config.KeybindingConfig) {
+		t.Views().Files().
+			IsEmpty().
+			IsFocused().
+			Press("a")
 
-		input.PressKeys("a")
+		t.ExpectPopup().Prompt().Title(Equals("Enter a file name")).Type("myfile").Confirm()
 
-		assert.InPrompt()
-		assert.MatchCurrentViewTitle(Equals("Enter a file name"))
-		input.Type("myfile")
-		input.Confirm()
+		t.ExpectPopup().Menu().Title(Equals("Choose file content")).Select(Contains("bar")).Confirm()
 
-		assert.InMenu()
-		assert.MatchCurrentViewTitle(Equals("Choose file content"))
-		assert.MatchSelectedLine(Contains("foo"))
-		input.NextItem()
-		assert.MatchSelectedLine(Contains("bar"))
-		input.Confirm()
+		t.ExpectPopup().Confirmation().
+			Title(Equals("Are you sure?")).
+			Content(Equals("Are you REALLY sure you want to make this file? Up to you buddy.")).
+			Confirm()
 
-		assert.InConfirm()
-		assert.MatchCurrentViewTitle(Equals("Are you sure?"))
-		input.Confirm()
+		t.Views().Files().
+			Focus().
+			Lines(
+				Contains("myfile").IsSelected(),
+			)
 
-		assert.WorkingTreeFileCount(1)
-		assert.MatchSelectedLine(Contains("myfile"))
-		assert.MatchMainViewContent(Contains("BAR"))
+		t.Views().Main().Content(Contains("BAR"))
 	},
 })

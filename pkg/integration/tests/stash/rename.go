@@ -7,31 +7,29 @@ import (
 
 var Rename = NewIntegrationTest(NewIntegrationTestArgs{
 	Description:  "Try to rename the stash.",
-	ExtraCmdArgs: "",
+	ExtraCmdArgs: []string{},
 	Skip:         false,
 	SetupConfig:  func(config *config.AppConfig) {},
 	SetupRepo: func(shell *Shell) {
 		shell.
 			EmptyCommit("blah").
 			CreateFileAndAdd("file-1", "change to stash1").
-			StashWithMessage("foo").
+			Stash("foo").
 			CreateFileAndAdd("file-2", "change to stash2").
-			StashWithMessage("bar")
+			Stash("bar")
 	},
-	Run: func(shell *Shell, input *Input, assert *Assert, keys config.KeybindingConfig) {
-		input.SwitchToStashWindow()
-		assert.CurrentViewName("stash")
-
-		assert.MatchSelectedLine(Equals("On master: bar"))
-		input.NextItem()
-		assert.MatchSelectedLine(Equals("On master: foo"))
-		input.PressKeys(keys.Stash.RenameStash)
-		assert.InPrompt()
-		assert.MatchCurrentViewTitle(Equals("Rename stash: stash@{1}"))
-
-		input.Type(" baz")
-		input.Confirm()
-
-		assert.MatchSelectedLine(Equals("On master: foo baz"))
+	Run: func(t *TestDriver, keys config.KeybindingConfig) {
+		t.Views().Stash().
+			Focus().
+			Lines(
+				Contains("On master: bar"),
+				Contains("On master: foo"),
+			).
+			SelectNextItem().
+			Press(keys.Stash.RenameStash).
+			Tap(func() {
+				t.ExpectPopup().Prompt().Title(Equals("Rename stash: stash@{1}")).Type(" baz").Confirm()
+			}).
+			SelectedLine(Contains("On master: foo baz"))
 	},
 })

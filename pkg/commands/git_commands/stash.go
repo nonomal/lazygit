@@ -4,19 +4,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jesseduffield/lazygit/pkg/commands/loaders"
 	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
 )
 
 type StashCommands struct {
 	*GitCommon
-	fileLoader  *loaders.FileLoader
+	fileLoader  *FileLoader
 	workingTree *WorkingTreeCommands
 }
 
 func NewStashCommands(
 	gitCommon *GitCommon,
-	fileLoader *loaders.FileLoader,
+	fileLoader *FileLoader,
 	workingTree *WorkingTreeCommands,
 ) *StashCommands {
 	return &StashCommands{
@@ -27,83 +26,145 @@ func NewStashCommands(
 }
 
 func (self *StashCommands) DropNewest() error {
-	return self.cmd.New("git stash drop").Run()
+	cmdArgs := NewGitCmd("stash").Arg("drop").ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
 func (self *StashCommands) Drop(index int) error {
-	return self.cmd.New(fmt.Sprintf("git stash drop stash@{%d}", index)).Run()
+	cmdArgs := NewGitCmd("stash").Arg("drop", fmt.Sprintf("stash@{%d}", index)).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
 func (self *StashCommands) Pop(index int) error {
-	return self.cmd.New(fmt.Sprintf("git stash pop stash@{%d}", index)).Run()
+	cmdArgs := NewGitCmd("stash").Arg("pop", fmt.Sprintf("stash@{%d}", index)).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
 func (self *StashCommands) Apply(index int) error {
-	return self.cmd.New(fmt.Sprintf("git stash apply stash@{%d}", index)).Run()
+	cmdArgs := NewGitCmd("stash").Arg("apply", fmt.Sprintf("stash@{%d}", index)).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
-// Save save stash
-func (self *StashCommands) Save(message string) error {
-	return self.cmd.New("git stash save " + self.cmd.Quote(message)).Run()
+// Push push stash
+func (self *StashCommands) Push(message string) error {
+	cmdArgs := NewGitCmd("stash").Arg("push", "-m", message).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
-func (self *StashCommands) Store(sha string, message string) error {
+func (self *StashCommands) Store(hash string, message string) error {
 	trimmedMessage := strings.Trim(message, " \t")
-	if len(trimmedMessage) > 0 {
-		return self.cmd.New(fmt.Sprintf("git stash store %s -m %s", self.cmd.Quote(sha), self.cmd.Quote(trimmedMessage))).Run()
-	}
-	return self.cmd.New(fmt.Sprintf("git stash store %s", self.cmd.Quote(sha))).Run()
+
+	cmdArgs := NewGitCmd("stash").Arg("store").
+		ArgIf(trimmedMessage != "", "-m", trimmedMessage).
+		Arg(hash).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
-func (self *StashCommands) Sha(index int) (string, error) {
-	sha, _, err := self.cmd.New(fmt.Sprintf("git rev-parse refs/stash@{%d}", index)).DontLog().RunWithOutputs()
-	return strings.Trim(sha, "\r\n"), err
+func (self *StashCommands) Hash(index int) (string, error) {
+	cmdArgs := NewGitCmd("rev-parse").
+		Arg(fmt.Sprintf("refs/stash@{%d}", index)).
+		ToArgv()
+
+	hash, _, err := self.cmd.New(cmdArgs).DontLog().RunWithOutputs()
+	return strings.Trim(hash, "\r\n"), err
 }
 
 func (self *StashCommands) ShowStashEntryCmdObj(index int) oscommands.ICmdObj {
-	cmdStr := fmt.Sprintf("git stash show -p --stat --color=%s --unified=%d stash@{%d}", self.UserConfig.Git.Paging.ColorArg, self.UserConfig.Git.DiffContextSize, index)
+	cmdArgs := NewGitCmd("stash").Arg("show").
+		Arg("-p").
+		Arg("--stat").
+		Arg(fmt.Sprintf("--color=%s", self.UserConfig().Git.Paging.ColorArg)).
+		Arg(fmt.Sprintf("--unified=%d", self.AppState.DiffContextSize)).
+		ArgIf(self.AppState.IgnoreWhitespaceInDiffView, "--ignore-all-space").
+		Arg(fmt.Sprintf("--find-renames=%d%%", self.AppState.RenameSimilarityThreshold)).
+		Arg(fmt.Sprintf("stash@{%d}", index)).
+		Dir(self.repoPaths.worktreePath).
+		ToArgv()
 
-	return self.cmd.New(cmdStr).DontLog()
+	return self.cmd.New(cmdArgs).DontLog()
 }
 
 func (self *StashCommands) StashAndKeepIndex(message string) error {
-	return self.cmd.New(fmt.Sprintf("git stash save %s --keep-index", self.cmd.Quote(message))).Run()
+	cmdArgs := NewGitCmd("stash").Arg("push", "--keep-index", "-m", message).
+		ToArgv()
+
+	return self.cmd.New(cmdArgs).Run()
 }
 
 func (self *StashCommands) StashUnstagedChanges(message string) error {
-	if err := self.cmd.New("git commit --no-verify -m \"[lazygit] stashing unstaged changes\"").Run(); err != nil {
+	if err := self.cmd.New(
+		NewGitCmd("commit").
+			Arg("--no-verify", "-m", "[lazygit] stashing unstaged changes").
+			ToArgv(),
+	).Run(); err != nil {
 		return err
 	}
-	if err := self.Save(message); err != nil {
+	if err := self.Push(message); err != nil {
 		return err
 	}
-	if err := self.cmd.New("git reset --soft HEAD^").Run(); err != nil {
+
+	if err := self.cmd.New(
+		NewGitCmd("reset").Arg("--soft", "HEAD^").ToArgv(),
+	).Run(); err != nil {
 		return err
 	}
 	return nil
 }
 
-// SaveStagedChanges stashes only the currently staged changes. This takes a few steps
-// shoutouts to Joe on https://stackoverflow.com/questions/14759748/stashing-only-staged-changes-in-git-is-it-possible
+// SaveStagedChanges stashes only the currently staged changes.
 func (self *StashCommands) SaveStagedChanges(message string) error {
+	if self.version.IsAtLeast(2, 35, 0) {
+		return self.cmd.New(NewGitCmd("stash").Arg("push").Arg("--staged").Arg("-m", message).ToArgv()).Run()
+	}
+
+	// Git versions older than 2.35.0 don't support the --staged flag, so we
+	// need to fall back to a more complex solution.
+	// Shoutouts to Joe on https://stackoverflow.com/questions/14759748/stashing-only-staged-changes-in-git-is-it-possible
+	//
+	// Note that this method has a few bugs:
+	// - it fails when there are *only* staged changes
+	// - it fails when staged and unstaged changes within a single file are too close together
+	// We don't bother fixing these, because users can simply update git when
+	// they are affected by these issues.
+
 	// wrap in 'writing', which uses a mutex
-	if err := self.cmd.New("git stash --keep-index").Run(); err != nil {
+	if err := self.cmd.New(
+		NewGitCmd("stash").Arg("--keep-index").ToArgv(),
+	).Run(); err != nil {
 		return err
 	}
 
-	if err := self.Save(message); err != nil {
+	if err := self.Push(message); err != nil {
 		return err
 	}
 
-	if err := self.cmd.New("git stash apply stash@{1}").Run(); err != nil {
+	if err := self.cmd.New(
+		NewGitCmd("stash").Arg("apply", "stash@{1}").ToArgv(),
+	).Run(); err != nil {
 		return err
 	}
 
-	if err := self.os.PipeCommands("git stash show -p", "git apply -R"); err != nil {
+	if err := self.os.PipeCommands(
+		self.cmd.New(NewGitCmd("stash").Arg("show", "-p").ToArgv()),
+		self.cmd.New(NewGitCmd("apply").Arg("-R").ToArgv()),
+	); err != nil {
 		return err
 	}
 
-	if err := self.cmd.New("git stash drop stash@{1}").Run(); err != nil {
+	if err := self.cmd.New(
+		NewGitCmd("stash").Arg("drop", "stash@{1}").ToArgv(),
+	).Run(); err != nil {
 		return err
 	}
 
@@ -111,7 +172,7 @@ func (self *StashCommands) SaveStagedChanges(message string) error {
 	// meaning it's deleted in your working tree but added in your index. Given that it's
 	// now safely stashed, we need to remove it.
 	files := self.fileLoader.
-		GetStatusFiles(loaders.GetStatusFileOptions{})
+		GetStatusFiles(GetStatusFileOptions{})
 
 	for _, file := range files {
 		if file.ShortStatus == "AD" {
@@ -124,8 +185,15 @@ func (self *StashCommands) SaveStagedChanges(message string) error {
 	return nil
 }
 
+func (self *StashCommands) StashIncludeUntrackedChanges(message string) error {
+	return self.cmd.New(
+		NewGitCmd("stash").Arg("push", "--include-untracked", "-m", message).
+			ToArgv(),
+	).Run()
+}
+
 func (self *StashCommands) Rename(index int, message string) error {
-	sha, err := self.Sha(index)
+	hash, err := self.Hash(index)
 	if err != nil {
 		return err
 	}
@@ -134,7 +202,7 @@ func (self *StashCommands) Rename(index int, message string) error {
 		return err
 	}
 
-	err = self.Store(sha, message)
+	err = self.Store(hash, message)
 	if err != nil {
 		return err
 	}

@@ -7,17 +7,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/go-errors/errors"
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/afero"
 
-	"github.com/jesseduffield/generics/slices"
 	appTypes "github.com/jesseduffield/lazygit/pkg/app/types"
-	"github.com/jesseduffield/lazygit/pkg/commands"
 	"github.com/jesseduffield/lazygit/pkg/commands/git_commands"
-	"github.com/jesseduffield/lazygit/pkg/commands/git_config"
 	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
 	"github.com/jesseduffield/lazygit/pkg/common"
 	"github.com/jesseduffield/lazygit/pkg/config"
@@ -25,6 +22,8 @@ import (
 	"github.com/jesseduffield/lazygit/pkg/env"
 	"github.com/jesseduffield/lazygit/pkg/gui"
 	"github.com/jesseduffield/lazygit/pkg/i18n"
+	integrationTypes "github.com/jesseduffield/lazygit/pkg/integration/types"
+	"github.com/jesseduffield/lazygit/pkg/logs"
 	"github.com/jesseduffield/lazygit/pkg/updates"
 )
 
@@ -36,7 +35,6 @@ type App struct {
 	Config    config.AppConfigurer
 	OSCommand *oscommands.OSCommand
 	Gui       *gui.Gui
-	Updater   *updates.Updater // may only need this on the Gui
 }
 
 func Run(
@@ -44,7 +42,7 @@ func Run(
 	common *common.Common,
 	startArgs appTypes.StartArgs,
 ) {
-	app, err := NewApp(config, common)
+	app, err := NewApp(config, startArgs.IntegrationTest, common)
 
 	if err == nil {
 		err = app.Run(startArgs)
@@ -64,24 +62,37 @@ func Run(
 
 func NewCommon(config config.AppConfigurer) (*common.Common, error) {
 	userConfig := config.GetUserConfig()
-
-	var err error
+	appState := config.GetAppState()
 	log := newLogger(config)
-	tr, err := i18n.NewTranslationSetFromConfig(log, userConfig.Gui.Language)
-	if err != nil {
-		return nil, err
-	}
+	// Initialize with English for the time being; the real translation set for
+	// the configured language will be read after reading the user config
+	tr := i18n.EnglishTranslationSet()
 
-	return &common.Common{
-		Log:        log,
-		Tr:         tr,
-		UserConfig: userConfig,
-		Debug:      config.GetDebug(),
-	}, nil
+	cmn := &common.Common{
+		Log:      log,
+		Tr:       tr,
+		AppState: appState,
+		Debug:    config.GetDebug(),
+		Fs:       afero.NewOsFs(),
+	}
+	cmn.SetUserConfig(userConfig)
+	return cmn, nil
+}
+
+func newLogger(cfg config.AppConfigurer) *logrus.Entry {
+	if cfg.GetDebug() {
+		logPath, err := config.LogPath()
+		if err != nil {
+			log.Fatal(err)
+		}
+		return logs.NewDevelopmentLogger(logPath)
+	} else {
+		return logs.NewProductionLogger()
+	}
 }
 
 // NewApp bootstrap a new application
-func NewApp(config config.AppConfigurer, common *common.Common) (*App, error) {
+func NewApp(config config.AppConfigurer, test integrationTypes.IntegrationTest, common *common.Common) (*App, error) {
 	app := &App{
 		closers: []io.Closer{},
 		Config:  config,
@@ -90,8 +101,7 @@ func NewApp(config config.AppConfigurer, common *common.Common) (*App, error) {
 
 	app.OSCommand = oscommands.NewOSCommand(common, config, oscommands.GetPlatform(), oscommands.NewNullGuiIO(app.Log))
 
-	var err error
-	app.Updater, err = updates.NewUpdater(common, config, app.OSCommand)
+	updater, err := updates.NewUpdater(common, config, app.OSCommand)
 	if err != nil {
 		return app, err
 	}
@@ -101,54 +111,48 @@ func NewApp(config config.AppConfigurer, common *common.Common) (*App, error) {
 		return app, err
 	}
 
-	showRecentRepos, err := app.setupRepo()
+	gitVersion, err := app.validateGitVersion()
 	if err != nil {
 		return app, err
 	}
 
-	gitConfig := git_config.NewStdCachedGitConfig(app.Log)
+	// If we're not in a repo, GetRepoPaths will return an error. The error is moot for us
+	// at this stage, since we'll try to init a new repo in setupRepo(), below
+	repoPaths, err := git_commands.GetRepoPaths(app.OSCommand.Cmd, gitVersion)
+	if err != nil {
+		common.Log.Infof("Error getting repo paths: %v", err)
+	}
 
-	app.Gui, err = gui.NewGui(common, config, gitConfig, app.Updater, showRecentRepos, dirName)
+	showRecentRepos, err := app.setupRepo(repoPaths)
+	if err != nil {
+		return app, err
+	}
+
+	// used for testing purposes
+	if os.Getenv("SHOW_RECENT_REPOS") == "true" {
+		showRecentRepos = true
+	}
+
+	app.Gui, err = gui.NewGui(common, config, gitVersion, updater, showRecentRepos, dirName, test)
 	if err != nil {
 		return app, err
 	}
 	return app, nil
 }
 
-func (app *App) validateGitVersion() error {
-	output, err := app.OSCommand.Cmd.New("git --version").RunWithOutput()
+func (app *App) validateGitVersion() (*git_commands.GitVersion, error) {
+	version, err := git_commands.GetGitVersion(app.OSCommand)
 	// if we get an error anywhere here we'll show the same status
 	minVersionError := errors.New(app.Tr.MinGitVersionError)
 	if err != nil {
-		return minVersionError
+		return nil, minVersionError
 	}
 
-	if isGitVersionValid(output) {
-		return nil
+	if version.IsOlderThan(2, 20, 0) {
+		return nil, minVersionError
 	}
 
-	return minVersionError
-}
-
-func isGitVersionValid(versionStr string) bool {
-	// output should be something like: 'git version 2.23.0 (blah)'
-	re := regexp.MustCompile(`[^\d]+([\d\.]+)`)
-	matches := re.FindStringSubmatch(versionStr)
-
-	if len(matches) == 0 {
-		return false
-	}
-
-	gitVersion := matches[1]
-	majorVersion, err := strconv.Atoi(gitVersion[0:1])
-	if err != nil {
-		return false
-	}
-	if majorVersion < 2 {
-		return false
-	}
-
-	return true
+	return version, nil
 }
 
 func isDirectoryAGitRepository(dir string) (bool, error) {
@@ -168,18 +172,16 @@ func openRecentRepo(app *App) bool {
 	return false
 }
 
-func (app *App) setupRepo() (bool, error) {
-	if err := app.validateGitVersion(); err != nil {
-		return false, err
-	}
-
+func (app *App) setupRepo(
+	repoPaths *git_commands.RepoPaths,
+) (bool, error) {
 	if env.GetGitDirEnv() != "" {
-		// we've been given the git dir directly. We'll verify this dir when initializing our Git object
+		// we've been given the git dir directly. Skip setup
 		return false, nil
 	}
 
 	// if we are not in a git repo, we ask if we want to `git init`
-	if err := commands.VerifyInGitRepo(app.OSCommand); err != nil {
+	if repoPaths == nil {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return false, err
@@ -191,7 +193,7 @@ func (app *App) setupRepo() (bool, error) {
 
 		var shouldInitRepo bool
 		initialBranchArg := ""
-		switch app.UserConfig.NotARepository {
+		switch app.UserConfig().NotARepository {
 		case "prompt":
 			// Offer to initialize a new repository in current directory.
 			fmt.Print(app.Tr.CreateRepo)
@@ -202,7 +204,7 @@ func (app *App) setupRepo() (bool, error) {
 				fmt.Print(app.Tr.InitialBranch)
 				response, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 				if trimmedResponse := strings.Trim(response, " \r\n"); len(trimmedResponse) > 0 {
-					initialBranchArg += "--initial-branch=" + app.OSCommand.Quote(trimmedResponse)
+					initialBranchArg += "--initial-branch=" + trimmedResponse
 				}
 			}
 		case "create":
@@ -218,9 +220,14 @@ func (app *App) setupRepo() (bool, error) {
 		}
 
 		if shouldInitRepo {
-			if err := app.OSCommand.Cmd.New("git init " + initialBranchArg).Run(); err != nil {
+			args := []string{"git", "init"}
+			if initialBranchArg != "" {
+				args = append(args, initialBranchArg)
+			}
+			if err := app.OSCommand.Cmd.New(args).Run(); err != nil {
 				return false, err
 			}
+
 			return false, nil
 		}
 
@@ -238,10 +245,7 @@ func (app *App) setupRepo() (bool, error) {
 	}
 
 	// Run this afterward so that the previous repo creation steps can run without this interfering
-	if isBare, err := git_commands.IsBareRepo(app.OSCommand); isBare {
-		if err != nil {
-			return false, err
-		}
+	if repoPaths.IsBareRepo() {
 
 		fmt.Print(app.Tr.BareRepo)
 
@@ -269,7 +273,11 @@ func (app *App) Run(startArgs appTypes.StartArgs) error {
 
 // Close closes any resources
 func (app *App) Close() error {
-	return slices.TryForEach(app.closers, func(closer io.Closer) error {
-		return closer.Close()
-	})
+	for _, closer := range app.closers {
+		if err := closer.Close(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

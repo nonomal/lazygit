@@ -3,7 +3,6 @@ package context
 import (
 	"math"
 
-	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/gui/mergeconflicts"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
 	"github.com/sasha-s/go-deadlock"
@@ -12,7 +11,7 @@ import (
 type MergeConflictsContext struct {
 	types.Context
 	viewModel *ConflictsViewModel
-	c         *types.HelperCommon
+	c         *ContextCommon
 	mutex     *deadlock.Mutex
 }
 
@@ -25,12 +24,7 @@ type ConflictsViewModel struct {
 }
 
 func NewMergeConflictsContext(
-	view *gocui.View,
-
-	opts ContextCallbackOpts,
-
-	c *types.HelperCommon,
-	getOptionsMap func() map[string]string,
+	c *ContextCommon,
 ) *MergeConflictsContext {
 	viewModel := &ConflictsViewModel{
 		state:                 mergeconflicts.NewState(),
@@ -42,14 +36,13 @@ func NewMergeConflictsContext(
 		mutex:     &deadlock.Mutex{},
 		Context: NewSimpleContext(
 			NewBaseContext(NewBaseContextOpts{
-				Kind:            types.MAIN_CONTEXT,
-				View:            view,
-				WindowName:      "main",
-				Key:             MERGE_CONFLICTS_CONTEXT_KEY,
-				OnGetOptionsMap: getOptionsMap,
-				Focusable:       true,
+				Kind:             types.MAIN_CONTEXT,
+				View:             c.Views().MergeConflicts,
+				WindowName:       "main",
+				Key:              MERGE_CONFLICTS_CONTEXT_KEY,
+				Focusable:        true,
+				HighlightOnFocus: true,
 			}),
-			opts,
 		),
 		c: c,
 	}
@@ -75,43 +68,52 @@ func (self *MergeConflictsContext) IsUserScrolling() bool {
 	return self.viewModel.userVerticalScrolling
 }
 
-func (self *MergeConflictsContext) RenderAndFocus(isFocused bool) error {
-	self.setContent(isFocused)
-	self.focusSelection()
+func (self *MergeConflictsContext) RenderAndFocus() {
+	self.setContent()
+	self.FocusSelection()
+
+	self.c.Render()
+}
+
+func (self *MergeConflictsContext) Render() error {
+	self.setContent()
 
 	self.c.Render()
 
 	return nil
 }
 
-func (self *MergeConflictsContext) Render(isFocused bool) error {
-	self.setContent(isFocused)
-
-	self.c.Render()
-
-	return nil
-}
-
-func (self *MergeConflictsContext) GetContentToRender(isFocused bool) string {
+func (self *MergeConflictsContext) GetContentToRender() string {
 	if self.GetState() == nil {
 		return ""
 	}
 
-	return mergeconflicts.ColoredConflictFile(self.GetState(), isFocused)
+	return mergeconflicts.ColoredConflictFile(self.GetState())
 }
 
-func (self *MergeConflictsContext) setContent(isFocused bool) {
-	self.GetView().SetContent(self.GetContentToRender(isFocused))
+func (self *MergeConflictsContext) setContent() {
+	self.GetView().SetContent(self.GetContentToRender())
 }
 
-func (self *MergeConflictsContext) focusSelection() {
+func (self *MergeConflictsContext) FocusSelection() {
 	if !self.IsUserScrolling() {
-		_ = self.GetView().SetOrigin(self.GetView().OriginX(), self.GetOriginY())
+		self.GetView().SetOriginY(self.GetOriginY())
 	}
+
+	self.SetSelectedLineRange()
+}
+
+func (self *MergeConflictsContext) SetSelectedLineRange() {
+	startIdx, endIdx := self.GetState().GetSelectedRange()
+	view := self.GetView()
+	originY := view.OriginY()
+	// As far as the view is concerned, we are always selecting a range
+	view.SetRangeSelectStart(startIdx)
+	view.SetCursorY(endIdx - originY)
 }
 
 func (self *MergeConflictsContext) GetOriginY() int {
 	view := self.GetView()
 	conflictMiddle := self.GetState().GetConflictMiddle()
-	return int(math.Max(0, float64(conflictMiddle-(view.Height()/2))))
+	return int(math.Max(0, float64(conflictMiddle-(view.InnerHeight()/2))))
 }

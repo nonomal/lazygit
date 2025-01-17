@@ -5,68 +5,19 @@ import (
 	"strings"
 
 	"github.com/jesseduffield/gocui"
-	"github.com/jesseduffield/lazygit/pkg/commands/git_commands"
+	"github.com/jesseduffield/lazygit/pkg/gui/style"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
 	"github.com/jesseduffield/lazygit/pkg/utils"
 )
 
 const HORIZONTAL_SCROLL_FACTOR = 3
 
-// these views need to be re-rendered when the screen mode changes. The commits view,
-// for example, will show authorship information in half and full screen mode.
-func (gui *Gui) rerenderViewsWithScreenModeDependentContent() error {
-	// for now we re-render all list views.
-	for _, context := range gui.getListContexts() {
-		if err := gui.rerenderView(context.GetView()); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func nextIntInCycle(sl []WindowMaximisation, current WindowMaximisation) WindowMaximisation {
-	for i, val := range sl {
-		if val == current {
-			if i == len(sl)-1 {
-				return sl[0]
-			}
-			return sl[i+1]
-		}
-	}
-	return sl[0]
-}
-
-func prevIntInCycle(sl []WindowMaximisation, current WindowMaximisation) WindowMaximisation {
-	for i, val := range sl {
-		if val == current {
-			if i > 0 {
-				return sl[i-1]
-			}
-			return sl[len(sl)-1]
-		}
-	}
-	return sl[len(sl)-1]
-}
-
-func (gui *Gui) nextScreenMode() error {
-	gui.State.ScreenMode = nextIntInCycle([]WindowMaximisation{SCREEN_NORMAL, SCREEN_HALF, SCREEN_FULL}, gui.State.ScreenMode)
-
-	return gui.rerenderViewsWithScreenModeDependentContent()
-}
-
-func (gui *Gui) prevScreenMode() error {
-	gui.State.ScreenMode = prevIntInCycle([]WindowMaximisation{SCREEN_NORMAL, SCREEN_HALF, SCREEN_FULL}, gui.State.ScreenMode)
-
-	return gui.rerenderViewsWithScreenModeDependentContent()
-}
-
 func (gui *Gui) scrollUpView(view *gocui.View) {
-	view.ScrollUp(gui.c.UserConfig.Gui.ScrollHeight)
+	view.ScrollUp(gui.c.UserConfig().Gui.ScrollHeight)
 }
 
 func (gui *Gui) scrollDownView(view *gocui.View) {
-	scrollHeight := gui.c.UserConfig.Gui.ScrollHeight
+	scrollHeight := gui.c.UserConfig().Gui.ScrollHeight
 	view.ScrollDown(scrollHeight)
 
 	if manager, ok := gui.viewBufferManagerMap[view.Name()]; ok {
@@ -76,7 +27,7 @@ func (gui *Gui) scrollDownView(view *gocui.View) {
 
 func (gui *Gui) scrollUpMain() error {
 	var view *gocui.View
-	if gui.c.CurrentContext().GetWindowName() == "secondary" {
+	if gui.c.Context().Current().GetWindowName() == "secondary" {
 		view = gui.secondaryView()
 	} else {
 		view = gui.mainView()
@@ -97,7 +48,7 @@ func (gui *Gui) scrollUpMain() error {
 
 func (gui *Gui) scrollDownMain() error {
 	var view *gocui.View
-	if gui.c.CurrentContext().GetWindowName() == "secondary" {
+	if gui.c.Context().Current().GetWindowName() == "secondary" {
 		view = gui.secondaryView()
 	} else {
 		view = gui.mainView()
@@ -113,13 +64,13 @@ func (gui *Gui) scrollDownMain() error {
 }
 
 func (gui *Gui) mainView() *gocui.View {
-	viewName := gui.getViewNameForWindow("main")
+	viewName := gui.helpers.Window.GetViewNameForWindow("main")
 	view, _ := gui.g.View(viewName)
 	return view
 }
 
 func (gui *Gui) secondaryView() *gocui.View {
-	viewName := gui.getViewNameForWindow("secondary")
+	viewName := gui.helpers.Window.GetViewNameForWindow("secondary")
 	view, _ := gui.g.View(viewName)
 	return view
 }
@@ -158,34 +109,86 @@ func (gui *Gui) scrollDownConfirmationPanel() error {
 	return nil
 }
 
-func (gui *Gui) handleRefresh() error {
-	return gui.c.Refresh(types.RefreshOptions{Mode: types.ASYNC})
-}
-
-func (gui *Gui) backgroundFetch() (err error) {
-	err = gui.git.Sync.Fetch(git_commands.FetchOptions{Background: true})
-
-	_ = gui.c.Refresh(types.RefreshOptions{Scope: []types.RefreshableView{types.BRANCHES, types.COMMITS, types.REMOTES, types.TAGS}, Mode: types.ASYNC})
-
-	return err
-}
-
 func (gui *Gui) handleCopySelectedSideContextItemToClipboard() error {
+	return gui.handleCopySelectedSideContextItemToClipboardWithTruncation(-1)
+}
+
+func (gui *Gui) handleCopySelectedSideContextItemCommitHashToClipboard() error {
+	return gui.handleCopySelectedSideContextItemToClipboardWithTruncation(
+		gui.UserConfig().Git.TruncateCopiedCommitHashesTo)
+}
+
+func (gui *Gui) handleCopySelectedSideContextItemToClipboardWithTruncation(maxWidth int) error {
 	// important to note that this assumes we've selected an item in a side context
-	itemId := gui.getSideContextSelectedItemId()
+	currentSideContext := gui.c.Context().CurrentSide()
+	if currentSideContext == nil {
+		return nil
+	}
+
+	listContext, ok := currentSideContext.(types.IListContext)
+	if !ok {
+		return nil
+	}
+
+	itemId := listContext.GetSelectedItemId()
 
 	if itemId == "" {
 		return nil
 	}
 
+	if maxWidth > 0 {
+		itemId = itemId[:min(len(itemId), maxWidth)]
+	}
+
 	gui.c.LogAction(gui.c.Tr.Actions.CopyToClipboard)
 	if err := gui.os.CopyToClipboard(itemId); err != nil {
-		return gui.c.Error(err)
+		return err
 	}
 
 	truncatedItemId := utils.TruncateWithEllipsis(strings.Replace(itemId, "\n", " ", -1), 50)
 
-	gui.c.Toast(fmt.Sprintf("'%s' %s", truncatedItemId, gui.c.Tr.LcCopiedToClipboard))
+	gui.c.Toast(fmt.Sprintf("'%s' %s", truncatedItemId, gui.c.Tr.CopiedToClipboard))
 
 	return nil
+}
+
+func (gui *Gui) getCopySelectedSideContextItemToClipboardDisabledReason() *types.DisabledReason {
+	// important to note that this assumes we've selected an item in a side context
+	currentSideContext := gui.c.Context().CurrentSide()
+	if currentSideContext == nil {
+		// This should never happen but if it does we'll just ignore the keypress
+		return nil
+	}
+
+	listContext, ok := currentSideContext.(types.IListContext)
+	if !ok {
+		// This should never happen but if it does we'll just ignore the keypress
+		return nil
+	}
+
+	startIdx, endIdx := listContext.GetList().GetSelectionRange()
+	if startIdx != endIdx {
+		return &types.DisabledReason{Text: gui.Tr.RangeSelectNotSupported}
+	}
+
+	return nil
+}
+
+func (gui *Gui) setCaption(caption string) {
+	gui.Views.Options.FgColor = gocui.ColorWhite
+	gui.Views.Options.FgColor |= gocui.AttrBold
+	gui.Views.Options.SetContent(captionPrefix + " " + style.FgCyan.SetBold().Sprint(caption))
+	gui.c.Render()
+}
+
+var captionPrefix = ""
+
+func (gui *Gui) setCaptionPrefix(prefix string) {
+	gui.Views.Options.FgColor = gocui.ColorWhite
+	gui.Views.Options.FgColor |= gocui.AttrBold
+
+	captionPrefix = prefix
+
+	gui.Views.Options.SetContent(prefix)
+	gui.c.Render()
 }

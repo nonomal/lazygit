@@ -3,8 +3,8 @@ package hosting_service
 import (
 	"testing"
 
+	"github.com/jesseduffield/lazygit/pkg/fakes"
 	"github.com/jesseduffield/lazygit/pkg/i18n"
-	"github.com/jesseduffield/lazygit/pkg/test"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -87,6 +87,16 @@ func TestGetPullRequestURL(t *testing.T) {
 			},
 		},
 		{
+			testName:  "Opens a link to new pull request on github with specific target branch (different git username)",
+			from:      "feature/sum-operation",
+			to:        "feature/operations",
+			remoteUrl: "ssh://org-12345@github.com:peter/calculator.git",
+			test: func(url string, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "https://github.com/peter/calculator/compare/feature%2Foperations...feature%2Fsum-operation?expand=1", url)
+			},
+		},
+		{
 			testName:  "Opens a link to new pull request on github with https remote url with specific target branch",
 			from:      "feature/sum-operation",
 			to:        "feature/operations",
@@ -102,7 +112,7 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "git@gitlab.com:peter/calculator.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/peter/calculator/merge_requests/new?merge_request[source_branch]=feature%2Fui", url)
+				assert.Equal(t, "https://gitlab.com/peter/calculator/-/merge_requests/new?merge_request[source_branch]=feature%2Fui", url)
 			},
 		},
 		{
@@ -111,7 +121,7 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "git@gitlab.com:peter/public/calculator.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/peter/public/calculator/merge_requests/new?merge_request[source_branch]=feature%2Fui", url)
+				assert.Equal(t, "https://gitlab.com/peter/public/calculator/-/merge_requests/new?merge_request[source_branch]=feature%2Fui", url)
 			},
 		},
 		{
@@ -120,7 +130,7 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "https://gitlab.com/peter/public/calculator.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/peter/public/calculator/merge_requests/new?merge_request[source_branch]=feature%2Fui", url)
+				assert.Equal(t, "https://gitlab.com/peter/public/calculator/-/merge_requests/new?merge_request[source_branch]=feature%2Fui", url)
 			},
 		},
 		{
@@ -130,7 +140,7 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "git@gitlab.com:peter/calculator.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/peter/calculator/merge_requests/new?merge_request[source_branch]=feature%2Fcommit-ui&merge_request[target_branch]=epic%2Fui", url)
+				assert.Equal(t, "https://gitlab.com/peter/calculator/-/merge_requests/new?merge_request[source_branch]=feature%2Fcommit-ui&merge_request[target_branch]=epic%2Fui", url)
 			},
 		},
 		{
@@ -140,7 +150,7 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "git@gitlab.com:peter/public/calculator.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/peter/public/calculator/merge_requests/new?merge_request[source_branch]=feature%2Fcommit-ui&merge_request[target_branch]=epic%2Fui", url)
+				assert.Equal(t, "https://gitlab.com/peter/public/calculator/-/merge_requests/new?merge_request[source_branch]=feature%2Fcommit-ui&merge_request[target_branch]=epic%2Fui", url)
 			},
 		},
 		{
@@ -150,7 +160,7 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "https://gitlab.com/peter/public/calculator.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/peter/public/calculator/merge_requests/new?merge_request[source_branch]=feature%2Fcommit-ui&merge_request[target_branch]=epic%2Fui", url)
+				assert.Equal(t, "https://gitlab.com/peter/public/calculator/-/merge_requests/new?merge_request[source_branch]=feature%2Fcommit-ui&merge_request[target_branch]=epic%2Fui", url)
 			},
 		},
 		{
@@ -198,6 +208,19 @@ func TestGetPullRequestURL(t *testing.T) {
 			test: func(url string, err error) {
 				assert.NoError(t, err)
 				assert.Equal(t, "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequestcreate?sourceRef=feature%2Fnew&targetRef=dev", url)
+			},
+		},
+		{
+			testName:  "Opens a link to new pull request on Azure DevOps Server (HTTP)",
+			from:      "feature/new",
+			remoteUrl: "https://mycompany.azuredevops.com/collection/myproject/_git/myrepo",
+			configServiceDomains: map[string]string{
+				// valid configuration for a azure devops server URL
+				"mycompany.azuredevops.com": "azuredevops:mycompany.azuredevops.com",
+			},
+			test: func(url string, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "https://mycompany.azuredevops.com/collection/myproject/_git/myrepo/pullrequestcreate?sourceRef=feature%2Fnew", url)
 			},
 		},
 		{
@@ -255,6 +278,60 @@ func TestGetPullRequestURL(t *testing.T) {
 			},
 		},
 		{
+			testName:  "Opens a link to new pull request on Gitea Server (SSH)",
+			from:      "feature/new",
+			remoteUrl: "ssh://git@mycompany.gitea.io/myproject/myrepo.git",
+			configServiceDomains: map[string]string{
+				// valid configuration for a gitea server URL
+				"mycompany.gitea.io": "gitea:mycompany.gitea.io",
+			},
+			test: func(url string, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "https://mycompany.gitea.io/myproject/myrepo/compare/feature%2Fnew", url)
+			},
+		},
+		{
+			testName:  "Opens a link to new pull request on Gitea Server (SSH) with specific target",
+			from:      "feature/new",
+			to:        "dev",
+			remoteUrl: "ssh://git@mycompany.gitea.io/myproject/myrepo.git",
+			configServiceDomains: map[string]string{
+				// valid configuration for a gitea server URL
+				"mycompany.gitea.io": "gitea:mycompany.gitea.io",
+			},
+			test: func(url string, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "https://mycompany.gitea.io/myproject/myrepo/compare/dev...feature%2Fnew", url)
+			},
+		},
+		{
+			testName:  "Opens a link to new pull request on Gitea Server (HTTP)",
+			from:      "feature/new",
+			remoteUrl: "https://mycompany.gitea.io/myproject/myrepo.git",
+			configServiceDomains: map[string]string{
+				// valid configuration for a gitea server URL
+				"mycompany.gitea.io": "gitea:mycompany.gitea.io",
+			},
+			test: func(url string, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "https://mycompany.gitea.io/myproject/myrepo/compare/feature%2Fnew", url)
+			},
+		},
+		{
+			testName:  "Opens a link to new pull request on Gitea Server (HTTP) with specific target",
+			from:      "feature/new",
+			to:        "dev",
+			remoteUrl: "https://mycompany.gitea.io/myproject/myrepo.git",
+			configServiceDomains: map[string]string{
+				// valid configuration for a gitea server URL
+				"mycompany.gitea.io": "gitea:mycompany.gitea.io",
+			},
+			test: func(url string, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "https://mycompany.gitea.io/myproject/myrepo/compare/dev...feature%2Fnew", url)
+			},
+		},
+		{
 			testName:  "Throws an error if git service is unsupported",
 			from:      "feature/divide-operation",
 			remoteUrl: "git@something.com:peter/calculator.git",
@@ -275,6 +352,30 @@ func TestGetPullRequestURL(t *testing.T) {
 				assert.Equal(t, "https://bitbucket.org/johndoe/social_network/pull-requests/new?source=feature%2Fprofile-page&t=1", url)
 			},
 			expectedLoggedErrors: nil,
+		},
+		{
+			testName:  "Does not log error when config service webDomain contains a port",
+			from:      "feature/profile-page",
+			remoteUrl: "git@my.domain.test:johndoe/social_network.git",
+			configServiceDomains: map[string]string{
+				"my.domain.test": "gitlab:my.domain.test:1111",
+			},
+			test: func(url string, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "https://my.domain.test:1111/johndoe/social_network/-/merge_requests/new?merge_request[source_branch]=feature%2Fprofile-page", url)
+			},
+		},
+		{
+			testName:  "Logs error when webDomain contains more than one colon",
+			from:      "feature/profile-page",
+			remoteUrl: "git@my.domain.test:johndoe/social_network.git",
+			configServiceDomains: map[string]string{
+				"my.domain.test": "gitlab:my.domain.test:1111:2222",
+			},
+			test: func(url string, err error) {
+				assert.Error(t, err)
+			},
+			expectedLoggedErrors: []string{"Unexpected format for git service: 'gitlab:my.domain.test:1111:2222'. Expected something like 'github.com:github.com'"},
 		},
 		{
 			testName:  "Logs error when config service domain is malformed",
@@ -300,7 +401,7 @@ func TestGetPullRequestURL(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, "https://bitbucket.org/johndoe/social_network/pull-requests/new?source=feature%2Fprofile-page&t=1", url)
 			},
-			expectedLoggedErrors: []string{"Unknown git service type: 'noservice'. Expected one of github, bitbucket, gitlab, azuredevops, bitbucketServer"},
+			expectedLoggedErrors: []string{"Unknown git service type: 'noservice'. Expected one of github, bitbucket, gitlab, azuredevops, bitbucketServer, gitea"},
 		},
 		{
 			testName:  "Escapes reserved URL characters in from branch name",
@@ -309,7 +410,7 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "git@gitlab.com:me/public/repo-with-issues.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/me/public/repo-with-issues/merge_requests/new?merge_request[source_branch]=feature%2FsomeIssue%23123&merge_request[target_branch]=master", url)
+				assert.Equal(t, "https://gitlab.com/me/public/repo-with-issues/-/merge_requests/new?merge_request[source_branch]=feature%2FsomeIssue%23123&merge_request[target_branch]=master", url)
 			},
 		},
 		{
@@ -319,17 +420,16 @@ func TestGetPullRequestURL(t *testing.T) {
 			remoteUrl: "git@gitlab.com:me/public/repo-with-issues.git",
 			test: func(url string, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, "https://gitlab.com/me/public/repo-with-issues/merge_requests/new?merge_request[source_branch]=yolo&merge_request[target_branch]=archive%2Fnever-ending-feature%23666", url)
+				assert.Equal(t, "https://gitlab.com/me/public/repo-with-issues/-/merge_requests/new?merge_request[source_branch]=yolo&merge_request[target_branch]=archive%2Fnever-ending-feature%23666", url)
 			},
 		},
 	}
 
 	for _, s := range scenarios {
-		s := s
 		t.Run(s.testName, func(t *testing.T) {
 			tr := i18n.EnglishTranslationSet()
-			log := &test.FakeFieldLogger{}
-			hostingServiceMgr := NewHostingServiceMgr(log, &tr, s.remoteUrl, s.configServiceDomains)
+			log := &fakes.FakeFieldLogger{}
+			hostingServiceMgr := NewHostingServiceMgr(log, tr, s.remoteUrl, s.configServiceDomains)
 			s.test(hostingServiceMgr.GetPullRequestURL(s.from, s.to))
 			log.AssertErrors(t, s.expectedLoggedErrors)
 		})
